@@ -64,6 +64,12 @@ class NetnsController:
         logger.debug("Creating netns: %s", name)
         _run(["ip", "netns", "add", name])
         self._active_ns.add(name)
+        # Disable DAD inside the netns to speed up IPv6 interface readiness
+        try:
+            _run(["ip", "netns", "exec", name, "sysctl", "-w", "net.ipv6.conf.all.accept_dad=0"])
+            _run(["ip", "netns", "exec", name, "sysctl", "-w", "net.ipv6.conf.default.accept_dad=0"])
+        except subprocess.CalledProcessError as e:
+            logger.warning("Could not set accept_dad sysctls inside netns %s: %s", name, e)
 
     def destroy_netns(self, name: str) -> None:
         """Delete a network namespace. Idempotent (ignores 'not found' errors)."""
@@ -79,38 +85,138 @@ class NetnsController:
         netns_name: str,
         veth_host: str,
         veth_peer: str,
-        host_ip: str = "10.0.0.1/24",
-        peer_ip: str = "10.0.0.2/24",
+        host_ip: str | list[str] = "10.0.0.1/24",
+        peer_ip: str | list[str] = "10.0.0.2/24",
     ) -> None:
         """
         Create a veth pair, move one end into *netns_name*, and assign IPs.
 
-        After this call:
-          - ``veth_host`` lives on the root namespace with IP ``host_ip``.
-          - ``veth_peer`` lives inside ``netns_name`` with IP ``peer_ip``.
-
-        Assigning IPs is essential: without them, packets destined for
-        ``peer_ip`` inside the namespace are not delivered to the ``input``
-        hook (the kernel can't identify a local recipient), so nftables
-        trace events for the ``input`` chain would never be generated.
+        Configures both IPv4 and IPv6 fallback addresses so that the namespace
+        can handle stateful sequences or tests on either protocol family.
         """
         logger.debug(
-            "Creating veth pair %s (%s) <-> %s (%s) in netns %s",
-            veth_host, host_ip, veth_peer, peer_ip, netns_name,
+            "Creating veth pair %s <-> %s in netns %s",
+            veth_host, veth_peer, netns_name,
         )
+        
+        # Parse host and peer IPs (which could be single strings or list of strings)
+        host_ips = [host_ip] if isinstance(host_ip, str) else list(host_ip)
+        peer_ips = [peer_ip] if isinstance(peer_ip, str) else list(peer_ip)
+        
+        v4_host, v6_host = None, None
+        v4_peer, v6_peer = None, None
+        
+        for ip in host_ips:
+            if ":" in ip:
+                v6_host = ip
+            else:
+                v4_host = ip
+        for ip in peer_ips:
+            if ":" in ip:
+                v6_peer = ip
+            else:
+                v4_peer = ip
+                
+        # Inject defaults if missing to support hybrid/both tests easily
+        if not v4_host:
+            v4_host = "10.0.0.1/24"
+        if not v4_peer:
+            v4_peer = "10.0.0.2/24"
+        if not v6_host:
+            v6_host = "fd00::1/64"
+        if not v6_peer:
+            v6_peer = "fd00::2/64"
+
         # Create veth pair in the root namespace
         _run(["ip", "link", "add", veth_host, "type", "veth", "peer", "name", veth_peer])
         # Move the peer end into the target namespace
         _run(["ip", "link", "set", veth_peer, "netns", netns_name])
 
         # --- Host side ---
-        _run(["ip", "addr", "add", host_ip, "dev", veth_host])
+        if v4_host:
+            _run(["ip", "addr", "add", v4_host, "dev", veth_host])
+        if v6_host:
+            _run(["ip", "addr", "add", v6_host, "dev", veth_host])
         _run(["ip", "link", "set", veth_host, "up"])
 
         # --- Namespace side ---
-        _run(["ip", "netns", "exec", netns_name, "ip", "addr", "add", peer_ip, "dev", veth_peer])
+        if v4_peer:
+            _run(["ip", "netns", "exec", netns_name, "ip", "addr", "add", v4_peer, "dev", veth_peer])
+        if v6_peer:
+            _run(["ip", "netns", "exec", netns_name, "ip", "addr", "add", v6_peer, "dev", veth_peer])
         _run(["ip", "netns", "exec", netns_name, "ip", "link", "set", veth_peer, "up"])
         _run(["ip", "netns", "exec", netns_name, "ip", "link", "set", "lo", "up"])
+
+    def create_gateway_topology(
+        self,
+        router_ns: str,
+        server_ns: str,
+        veth_host: str,
+        veth_router_host: str,
+        veth_router_server: str,
+        veth_server: str,
+        host_v4: str = "10.0.1.1/24",
+        router_host_v4: str = "10.0.1.2/24",
+        router_server_v4: str = "10.0.2.1/24",
+        server_v4: str = "10.0.2.2/24",
+        host_v6: str = "fd00:1::1/64",
+        router_host_v6: str = "fd00:1::2/64",
+        router_server_v6: str = "fd00:2::1/64",
+        server_v6: str = "fd00:2::2/64",
+    ) -> None:
+        """
+        Create router and server namespaces, build double veth links,
+        enable IPv4/IPv6 forwarding inside the router, and add transit routes.
+        """
+        logger.info("Setting up gateway topology: %s <-> %s", router_ns, server_ns)
+        # Create namespaces
+        self.create_netns(router_ns)
+        self.create_netns(server_ns)
+
+        # Enable IPv4/IPv6 forwarding on router namespace
+        _run(["ip", "netns", "exec", router_ns, "sysctl", "-w", "net.ipv4.ip_forward=1"])
+        _run(["ip", "netns", "exec", router_ns, "sysctl", "-w", "net.ipv6.conf.all.forwarding=1"])
+        
+        # 1. Create Host <-> Router veth pair
+        _run(["ip", "link", "add", veth_host, "type", "veth", "peer", "name", veth_router_host])
+        _run(["ip", "link", "set", veth_router_host, "netns", router_ns])
+
+        _run(["ip", "addr", "add", host_v4, "dev", veth_host])
+        _run(["ip", "addr", "add", host_v6, "dev", veth_host])
+        _run(["ip", "link", "set", veth_host, "up"])
+
+        _run(["ip", "netns", "exec", router_ns, "ip", "addr", "add", router_host_v4, "dev", veth_router_host])
+        _run(["ip", "netns", "exec", router_ns, "ip", "addr", "add", router_host_v6, "dev", veth_router_host])
+        _run(["ip", "netns", "exec", router_ns, "ip", "link", "set", veth_router_host, "up"])
+
+        # 2. Create Router <-> Server veth pair
+        _run(["ip", "netns", "exec", router_ns, "ip", "link", "add", veth_router_server, "type", "veth", "peer", "name", veth_server])
+        _run(["ip", "netns", "exec", router_ns, "ip", "link", "set", veth_server, "netns", server_ns])
+
+        _run(["ip", "netns", "exec", router_ns, "ip", "addr", "add", router_server_v4, "dev", veth_router_server])
+        _run(["ip", "netns", "exec", router_ns, "ip", "addr", "add", router_server_v6, "dev", veth_router_server])
+        _run(["ip", "netns", "exec", router_ns, "ip", "link", "set", veth_router_server, "up"])
+
+        _run(["ip", "netns", "exec", server_ns, "ip", "addr", "add", server_v4, "dev", veth_server])
+        _run(["ip", "netns", "exec", server_ns, "ip", "addr", "add", server_v6, "dev", veth_server])
+        _run(["ip", "netns", "exec", server_ns, "ip", "link", "set", veth_server, "up"])
+
+        # Bring up loopbacks
+        _run(["ip", "netns", "exec", router_ns, "ip", "link", "set", "lo", "up"])
+        _run(["ip", "netns", "exec", server_ns, "ip", "link", "set", "lo", "up"])
+
+        # 3. Setup transit routing
+        # Route on Host: Server subnet via Router host IP
+        host_rt_via = router_host_v4.split("/")[0]
+        host_rt_via6 = router_host_v6.split("/")[0]
+        _run(["ip", "route", "add", "10.0.2.0/24", "via", host_rt_via, "dev", veth_host])
+        _run(["ip", "-6", "route", "add", "fd00:2::/64", "via", host_rt_via6, "dev", veth_host])
+
+        # Route on Server: Host subnet via Router server IP (default route is cleanest)
+        srv_rt_via = router_server_v4.split("/")[0]
+        srv_rt_via6 = router_server_v6.split("/")[0]
+        _run(["ip", "netns", "exec", server_ns, "ip", "route", "add", "default", "via", srv_rt_via, "dev", veth_server])
+        _run(["ip", "netns", "exec", server_ns, "ip", "-6", "route", "add", "default", "via", srv_rt_via6, "dev", veth_server])
 
     def cleanup_all(self) -> None:
         """

@@ -1,0 +1,34 @@
+tests:
+  - name: "Simple Topology Allow TCP 80"
+    topology: "simple"
+    rules: |
+      table ip filter {
+        chain input {
+          type filter hook input priority 0; policy drop;
+          tcp dport 80 accept
+        }
+      }
+    packets:
+      - protocol: "tcp"
+        dst_port: 80
+        expected_verdict: "ACCEPT"
+      - protocol: "tcp"
+        dst_port: 22
+        expected_verdict: "DROP"
+
+  - name: "Gateway Topology Forwarding Allow UDP 53"
+    topology: "gateway"
+    rules: |
+      table ip filter {
+        chain forward {
+          type filter hook forward priority 0; policy drop;
+          udp dport 53 accept
+        }
+      }
+    packets:
+      - protocol: "udp"
+        dst_port: 53
+        expected_verdict: "ACCEPT"
+      - protocol: "udp"
+        dst_port: 80
+        expected_verdict: "DROP"

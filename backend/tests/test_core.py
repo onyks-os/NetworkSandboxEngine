@@ -19,12 +19,12 @@ def test_netns_lifecycle(mock_run: MagicMock) -> None:
     
     # Test creation
     controller.create_netns("nse_test")
-    mock_run.assert_called_with(["ip", "netns", "add", "nse_test"])
+    mock_run.assert_any_call(["ip", "netns", "add", "nse_test"])
     assert "nse_test" in controller._active_ns
     
     # Test destruction
     controller.destroy_netns("nse_test")
-    mock_run.assert_called_with(["ip", "netns", "del", "nse_test"])
+    mock_run.assert_any_call(["ip", "netns", "del", "nse_test"])
     assert "nse_test" not in controller._active_ns
 
 

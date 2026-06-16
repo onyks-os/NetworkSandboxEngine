@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: setup backend frontend dev test integration-test clean help
+.PHONY: setup backend frontend dev test integration-test clean release help
 
 # ============================================================
 # Setup
@@ -74,13 +74,43 @@ integration-test:
 build-frontend:
 	cd frontend && npm run build
 
-# ============================================================
+## release: Build frontend and package all backend & deployment files to release/ directory with SHA256 checksums
+release: clean build-frontend
+	@echo "[NSE] Preparing release artifacts…"
+	rm -rf release/ backend/nse/dist/
+	mkdir -p release/
+	# Copy built frontend assets into location where FastAPI will pack them
+	mkdir -p backend/nse/dist
+	cp -r frontend/dist/* backend/nse/dist/
+	# Ensure python packaging tools are installed
+	.venv/bin/python -m pip install --upgrade build
+	# Build Python package
+	cd backend && ../.venv/bin/python -m build --outdir ../release/
+	# Copy Dockerfile and systemd service file to release/
+	cp Dockerfile release/
+	cp scripts/nse.service release/
+	# Generate SHA256 sums of the release files
+	cd release && sha256sum * > SHA256SUMS
+	# Generate GPG signature if gpg is available
+	@if command -v gpg &>/dev/null; then \
+		echo "[NSE] Signing SHA256SUMS with GPG…"; \
+		gpg --clearsign --output release/SHA256SUMS.asc release/SHA256SUMS || echo "Warning: GPG signing failed. You can sign manually later."; \
+	else \
+		echo "Warning: gpg command not found. Skipping GPG signature."; \
+	fi
+	@echo "========================================================================"
+	@echo "Release preparation complete!"
+	@echo "Artifacts are stored in the 'release/' directory:"
+	@ls -la release/
+	@echo "========================================================================"
+
 # Housekeeping
 # ============================================================
 
 ## clean: Remove build artifacts, caches, and temp files
 clean:
-	rm -rf frontend/dist frontend/.vite
+	rm -rf frontend/dist frontend/.vite release/
+	rm -rf backend/dist/ backend/build/ backend/nse.egg-info/ backend/nse/dist/
 	find backend -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	find backend -name "*.pyc" -delete 2>/dev/null || true
 

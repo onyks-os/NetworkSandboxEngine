@@ -7,15 +7,21 @@
 
 import { writable, derived } from 'svelte/store'
 
-// --- Packet specification (bound to PacketCrafter form) ---
-export const packetSpec = writable({
-  protocol: 'tcp',
-  src_ip: '10.0.0.1',
-  dst_ip: '10.0.0.2',
-  src_port: 12345,
-  dst_port: 80,
-  tcp_flags: ['S'],
-})
+// --- Packet sequence list (bound to PacketCrafter form) ---
+export const packets = writable([
+  {
+    protocol: 'tcp',
+    src_ip: '10.0.0.1',
+    dst_ip: '10.0.0.2',
+    src_port: 12345,
+    dst_port: 80,
+    tcp_flags: ['S'],
+  }
+])
+
+// --- Network topology configuration ---
+export const topology = writable('simple')
+
 
 // --- Rule editor content ---
 export const ruleText = writable(

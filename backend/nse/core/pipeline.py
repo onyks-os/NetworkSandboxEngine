@@ -27,6 +27,8 @@ from nse.core.rule_engine import RuleEngine, RuleValidationError
 from nse.core.scapy_injector import ScapyInjector
 from nse.core.trace_harvester import TraceHarvester
 from nse.models.trace_event import TraceEvent
+from nse.models.test_request import TopologyType
+from nse.core.mock_listener import start_mock_listener
 
 if TYPE_CHECKING:
     from nse.core.netns_controller import NetnsController, TestRun
@@ -43,98 +45,236 @@ _TRACE_TIMEOUT = 5.0
 _WARMUP_DELAY = 0.4
 
 
+def parse_conntrack_line(line: str) -> dict | None:
+    parts = line.strip().split()
+    if len(parts) < 6:
+        return None
+    proto = parts[2]
+    
+    state = None
+    if proto == "tcp":
+        tcp_states = {"ESTABLISHED", "SYN_SENT", "SYN_RECV", "FIN_WAIT", "TIME_WAIT", "CLOSE", "CLOSE_WAIT", "LAST_ACK"}
+        for p in parts[4:7]:
+            if p in tcp_states:
+                state = p
+                break
+        if not state:
+            state = "UNKNOWN"
+    else:
+        state = "ESTABLISHED"
+
+    src, dst = None, None
+    sport, dport = None, None
+    
+    for p in parts:
+        if p.startswith("src=") and not src:
+            src = p.split("=")[1]
+        elif p.startswith("dst=") and not dst:
+            dst = p.split("=")[1]
+        elif p.startswith("sport=") and not sport:
+            sport = int(p.split("=")[1])
+        elif p.startswith("dport=") and not dport:
+            dport = int(p.split("=")[1])
+            
+    if src and dst:
+        return {
+            "proto": proto.upper(),
+            "state": state,
+            "src": src,
+            "dst": dst,
+            "sport": sport,
+            "dport": dport
+        }
+    return None
+
+
+def read_conntrack_table(netns: str) -> list[dict]:
+    import subprocess
+    try:
+        res = subprocess.run(
+            ["ip", "netns", "exec", netns, "cat", "/proc/net/nf_conntrack"],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        lines = res.stdout.strip().split("\n")
+    except Exception:
+        try:
+            res = subprocess.run(
+                ["ip", "netns", "exec", netns, "cat", "/proc/net/ip_conntrack"],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            lines = res.stdout.strip().split("\n")
+        except Exception:
+            return []
+            
+    entries = []
+    for line in lines:
+        if not line.strip():
+            continue
+        entry = parse_conntrack_line(line)
+        if entry:
+            entries.append(entry)
+    return entries
+
+
 async def run_test_pipeline(controller: "NetnsController", run: "TestRun") -> None:
     """Full test lifecycle coroutine. Runs async inside the FastAPI event loop."""
     netns = run.netns_name
     queue = run.event_queue
     loop = asyncio.get_event_loop()
 
-    # Generate a unique host-side interface name to support parallel runs safely (max 15 chars in Linux)
-    veth_host = f"vh-{run.test_id[:10]}"
+    # Determine topology settings
+    is_gateway = run.request.topology == TopologyType.GATEWAY
+    router_ns = f"nse_router_{run.test_id[:10]}"
+    server_ns = f"nse_server_{run.test_id[:10]}"
+    
+    rules_netns = router_ns if is_gateway else run.netns_name
+    target_netns = server_ns if is_gateway else run.netns_name
+
+    veth_host = f"vhr-{run.test_id[:10]}" if is_gateway else f"vh-{run.test_id[:10]}"
+    veth_router_host = f"vrh-{run.test_id[:10]}"
+    veth_router_server = f"vrs-{run.test_id[:10]}"
+    veth_server = _VETH_PEER
 
     run.status = "running"
     harvester = TraceHarvester()
+    listeners = []
 
     try:
         # ------------------------------------------------------------------
-        # 1. Network namespace + veth  (blocking → executor)
+        # 1. Create Network Topology (blocking → executor)
         # ------------------------------------------------------------------
-        logger.info("[%s] Creating netns %s", run.test_id, netns)
-        await loop.run_in_executor(None, controller.create_netns, netns)
-
-        # Determine packet direction to assign IPs correctly:
-        # Host interface gets host_ip, and netns interface gets peer_ip.
-        src_ip = run.request.packet.src_ip or "10.0.0.1"
-        dst_ip = run.request.packet.dst_ip or "10.0.0.2"
-
-        is_incoming = True
-        if src_ip == "10.0.0.2":
-            is_incoming = False
-
-        if is_incoming:
-            host_ip_val = src_ip
-            peer_ip_val = dst_ip
+        if is_gateway:
+            logger.info("[%s] Setting up Gateway topology: router=%s, server=%s", run.test_id, router_ns, server_ns)
+            await loop.run_in_executor(
+                None,
+                controller.create_gateway_topology,
+                router_ns,
+                server_ns,
+                veth_host,
+                veth_router_host,
+                veth_router_server,
+                veth_server,
+            )
         else:
-            host_ip_val = dst_ip
-            peer_ip_val = src_ip
-
-        host_ip = f"{host_ip_val}/24"
-        peer_ip = f"{peer_ip_val}/24"
-
-        await loop.run_in_executor(
-            None,
-            controller.create_veth_pair,
-            netns,
-            veth_host,
-            _VETH_PEER,
-            host_ip,
-            peer_ip,
-        )
+            logger.info("[%s] Setting up Simple topology: netns=%s", run.test_id, netns)
+            await loop.run_in_executor(None, controller.create_netns, netns)
+            await loop.run_in_executor(
+                None,
+                controller.create_veth_pair,
+                netns,
+                veth_host,
+                _VETH_PEER,
+            )
 
         # ------------------------------------------------------------------
-        # 2. Load nftables rules  (blocking → executor)
+        # 2. Spawn Mock Listeners on target/server namespace
+        # ------------------------------------------------------------------
+        logger.info("[%s] Spawning background mock listeners inside %s", run.test_id, target_netns)
+        for packet in run.request.packets:
+            if packet.dst_port:
+                # Check direction: run listener if packet is incoming
+                packet_incoming = True
+                if packet.src_ip in ("10.0.0.2", "fd00::2", "10.0.2.2", "fd00:2::2"):
+                    packet_incoming = False
+                
+                if packet_incoming:
+                    bind_ip = "::" if ":" in packet.dst_ip else "0.0.0.0"
+                    # Prevent duplicates
+                    if not any(l["port"] == packet.dst_port and l["proto"] == packet.protocol for l in listeners):
+                        proc = await loop.run_in_executor(
+                            None,
+                            start_mock_listener,
+                            target_netns,
+                            packet.protocol,
+                            packet.dst_port,
+                            bind_ip,
+                        )
+                        listeners.append({
+                            "proc": proc,
+                            "port": packet.dst_port,
+                            "proto": packet.protocol,
+                        })
+
+        # ------------------------------------------------------------------
+        # 3. Load nftables rules (blocking → executor)
         # ------------------------------------------------------------------
         engine = RuleEngine()
-        logger.info("[%s] Loading rules into netns", run.test_id)
-        # Auto-inject `meta nftrace set 1` so tracing is always armed,
-        # even if the user forgot to include it in their ruleset.
+        logger.info("[%s] Loading rules into netns %s", run.test_id, rules_netns)
         traced_rules = _inject_trace_flag(run.request.rules)
         await loop.run_in_executor(
-            None, engine.load, traced_rules, netns
+            None, engine.load, traced_rules, rules_netns
         )
 
         # ------------------------------------------------------------------
-        # 3. Start trace harvester (async subprocess — stays on event loop)
+        # 4. Start trace harvester (async subprocess — stays on event loop)
         # ------------------------------------------------------------------
-        logger.info("[%s] Starting trace harvester", run.test_id)
+        logger.info("[%s] Starting trace harvester on netns %s", run.test_id, rules_netns)
         await harvester.start(
-            netns_name=netns, queue=queue, timeout=_TRACE_TIMEOUT
+            netns_name=rules_netns, queue=queue, timeout=_TRACE_TIMEOUT
         )
 
-        # Let nft monitor trace initialise before we fire the packet.
-        # Without this delay the packet may arrive before the monitor is ready.
+        # Let nft monitor trace initialise
         await asyncio.sleep(_WARMUP_DELAY)
 
         # ------------------------------------------------------------------
-        # 4. Inject packet  (blocking → executor)
+        # 5. Inject packet sequence
         # ------------------------------------------------------------------
-        logger.info("[%s] Injecting packet", run.test_id)
         injector = ScapyInjector()
-        await loop.run_in_executor(
-            None,
-            injector.inject,
-            run.request.packet,
-            netns,
-            veth_host,
-            _VETH_PEER,
-        )
+        for idx, packet in enumerate(run.request.packets):
+            logger.info("[%s] Injecting packet %d/%d", run.test_id, idx + 1, len(run.request.packets))
+            
+            # Setup injection netns & interface arguments
+            if is_gateway:
+                packet_incoming = True
+                if packet.src_ip in ("10.0.0.2", "fd00::2", "10.0.2.2", "fd00:2::2"):
+                    packet_incoming = False
+                
+                if packet_incoming:
+                    inject_netns = router_ns
+                    inj_veth_host = veth_host
+                    inj_veth_peer = veth_router_host
+                else:
+                    inject_netns = server_ns
+                    inj_veth_host = veth_router_server
+                    inj_veth_peer = veth_server
+            else:
+                inject_netns = run.netns_name
+                inj_veth_host = veth_host
+                inj_veth_peer = _VETH_PEER
 
-        # ------------------------------------------------------------------
-        # 5. Wait for the harvester to drain all trace events.
-        #    The harvester's _read_loop pushes None (sentinel) when it
-        #    hits EOF or the _TRACE_TIMEOUT, then the WS handler closes.
-        # ------------------------------------------------------------------
-        logger.info("[%s] Waiting for trace events…", run.test_id)
+            await loop.run_in_executor(
+                None,
+                injector.inject,
+                packet,
+                inject_netns,
+                inj_veth_host,
+                inj_veth_peer,
+            )
+
+            # Give a small slice for processing/trace events to trigger
+            await asyncio.sleep(0.3)
+
+            # Push live conntrack table updates
+            entries = await loop.run_in_executor(None, read_conntrack_table, rules_netns)
+            for entry in entries:
+                await queue.put(
+                    TraceEvent(
+                        type="conntrack",
+                        ct_proto=entry["proto"],
+                        ct_state=entry["state"],
+                        ct_src=entry["src"],
+                        ct_dst=entry["dst"],
+                        ct_sport=entry["sport"],
+                        ct_dport=entry["dport"],
+                    )
+                )
+
+        # Wait for the trace harvester to finish draining events.
+        logger.info("[%s] Waiting for trace events to complete…", run.test_id)
         if harvester._task is not None:
             await harvester._task
 
@@ -171,14 +311,32 @@ async def run_test_pipeline(controller: "NetnsController", run: "TestRun") -> No
 
     finally:
         # ------------------------------------------------------------------
-        # Teardown — runs AFTER harvester has drained all events.
-        # The kernel GC cleans up rules and interfaces inside the netns.
+        # Teardown mock listeners
         # ------------------------------------------------------------------
-        logger.info("[%s] Tearing down netns %s", run.test_id, netns)
+        logger.info("[%s] Tearing down mock listeners", run.test_id)
+        for listener in listeners:
+            try:
+                listener["proc"].terminate()
+                listener["proc"].wait(timeout=0.5)
+            except Exception:
+                try:
+                    listener["proc"].kill()
+                except Exception:
+                    pass
+
+        # ------------------------------------------------------------------
+        # Teardown namespaces & host interfaces (blocking → executor)
+        # ------------------------------------------------------------------
+        logger.info("[%s] Tearing down network topology", run.test_id)
         import subprocess
 
-        await loop.run_in_executor(None, controller.destroy_netns, netns)
-        # Clean up the host-side veth (disappears with its peer, but be explicit)
+        if is_gateway:
+            await loop.run_in_executor(None, controller.destroy_netns, router_ns)
+            await loop.run_in_executor(None, controller.destroy_netns, server_ns)
+        else:
+            await loop.run_in_executor(None, controller.destroy_netns, netns)
+
+        # Explicitly clean up host veth
         await loop.run_in_executor(
             None,
             lambda: subprocess.run(

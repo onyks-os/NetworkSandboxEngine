@@ -2,9 +2,11 @@
   import RuleEditor from "./lib/RuleEditor.svelte";
   import PacketCrafter from "./lib/PacketCrafter.svelte";
   import Pipeline from "./lib/Pipeline.svelte";
+  import DocsView from "./lib/DocsView.svelte";
 
   import {
-    packetSpec,
+    packets,
+    topology,
     ruleText,
     testId,
     connectionStatus,
@@ -17,6 +19,11 @@
   import { submitTest, openTraceSocket } from "./api/client.js";
 
   let activeSocket = null;
+  let currentHash = window.location.hash || '#/';
+
+  window.addEventListener('hashchange', () => {
+    currentHash = window.location.hash || '#/';
+  });
 
   async function runTest() {
     if (activeSocket) {
@@ -28,7 +35,7 @@
     connectionStatus.set("submitting");
 
     try {
-      const { test_id } = await submitTest($ruleText, $packetSpec);
+      const { test_id } = await submitTest($ruleText, $packets, $topology);
       testId.set(test_id);
       connectionStatus.set('connecting');
       console.log('[NSE] Test accepted, id:', test_id);
@@ -100,7 +107,10 @@
 </svelte:head>
 
 <!-- App shell -->
-<div class="app">
+{#if currentHash === '#/docs'}
+  <DocsView />
+{:else}
+  <div class="app">
   <!-- Header -->
   <header class="app-header">
     <div class="header-brand">
@@ -146,6 +156,20 @@
           Ready
         </div>
       {/if}
+
+      <a
+        href="#/docs"
+        target="_blank"
+        class="docs-btn"
+        title="Open User Guide and interactive examples"
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <circle cx="12" cy="12" r="10"></circle>
+          <line x1="12" y1="16" x2="12" y2="12"></line>
+          <line x1="12" y1="8" x2="12.01" y2="8"></line>
+        </svg>
+        Docs & Examples
+      </a>
 
       <button
         class="run-btn"
@@ -228,6 +252,7 @@
     {/if}
   </footer>
 </div>
+{/if}
 
 <style>
   /* --- Layout --- */
@@ -378,6 +403,29 @@
   .run-btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+  }
+
+  .docs-btn {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    background: var(--surface-2);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 0.5rem 0.9rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    font-family: "Inter", sans-serif;
+    text-decoration: none;
+  }
+
+  .docs-btn:hover {
+    background: var(--surface-3);
+    color: var(--text-primary);
+    border-color: var(--text-muted);
   }
 
   .spin {

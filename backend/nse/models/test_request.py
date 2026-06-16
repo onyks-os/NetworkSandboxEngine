@@ -8,9 +8,15 @@ PacketSpec describes the L3/L4 properties of the packet to forge.
 from __future__ import annotations
 
 from typing import Annotated, Literal
+from enum import Enum
 
 from pydantic import BaseModel, Field, field_validator
 import ipaddress
+
+
+class TopologyType(str, Enum):
+    SIMPLE = "simple"
+    GATEWAY = "gateway"
 
 
 class PacketSpec(BaseModel):
@@ -22,13 +28,13 @@ class PacketSpec(BaseModel):
     )
     src_ip: str = Field(
         default="10.0.0.1",
-        description="Source IP address (IPv4).",
-        examples=["192.168.1.10"],
+        description="Source IP address (IPv4 or IPv6).",
+        examples=["192.168.1.10", "fd00::1"],
     )
     dst_ip: str = Field(
         default="10.0.0.2",
-        description="Destination IP address (IPv4).",
-        examples=["192.168.1.1"],
+        description="Destination IP address (IPv4 or IPv6).",
+        examples=["192.168.1.1", "fd00::2"],
     )
     src_port: int | None = Field(
         default=None,
@@ -54,9 +60,9 @@ class PacketSpec(BaseModel):
     @classmethod
     def validate_ip(cls, v: str) -> str:
         try:
-            ipaddress.IPv4Address(v)
+            ipaddress.ip_address(v)
         except ValueError as exc:
-            raise ValueError(f"Invalid IPv4 address: {v!r}") from exc
+            raise ValueError(f"Invalid IP address (must be IPv4 or IPv6): {v!r}") from exc
         return v
 
     @field_validator("tcp_flags")
@@ -81,6 +87,12 @@ class TestRequest(BaseModel):
             "table ip filter {\n  chain input {\n    type filter hook input priority 0;\n    tcp dport 22 accept\n    drop\n  }\n}"
         ],
     )
-    packet: PacketSpec = Field(
-        description="The packet to forge and inject into the sandboxed namespace.",
+    packets: list[PacketSpec] = Field(
+        description="Sequence of packets to forge and inject into the sandboxed namespace.",
+        min_length=1,
+    )
+    topology: TopologyType = Field(
+        default=TopologyType.SIMPLE,
+        description="Sandbox network topology configuration.",
+        examples=[TopologyType.SIMPLE],
     )

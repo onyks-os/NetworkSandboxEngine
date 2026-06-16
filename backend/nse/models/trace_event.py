@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 class TraceEvent(BaseModel):
     """A single event emitted by `nft monitor trace` (or the pipeline itself)."""
 
-    type: Literal["hook", "match", "verdict", "error", "ping"] = Field(
+    type: Literal["hook", "match", "verdict", "error", "ping", "conntrack"] = Field(
         description="Event category."
     )
     trace_id: str | None = Field(
@@ -68,6 +68,13 @@ class TraceEvent(BaseModel):
         default=None,
         description="Unix timestamp of the event (seconds).",
     )
+    # Conntrack table state fields
+    ct_proto: str | None = Field(default=None, description="Conntrack layer 4 protocol.")
+    ct_state: str | None = Field(default=None, description="Conntrack connection state.")
+    ct_src: str | None = Field(default=None, description="Conntrack source IP.")
+    ct_dst: str | None = Field(default=None, description="Conntrack destination IP.")
+    ct_sport: int | None = Field(default=None, description="Conntrack source port.")
+    ct_dport: int | None = Field(default=None, description="Conntrack destination port.")
 
 
 class TestStatusResponse(BaseModel):

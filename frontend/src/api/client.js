@@ -12,16 +12,18 @@ const WS_BASE = `ws://${location.host}`
  * Submit a new test run.
  *
  * @param {string} ruleText  - Raw nftables ruleset text
- * @param {Object} packetSpec - PacketSpec object
+ * @param {Array<Object>} packetsList - Array of PacketSpec objects
+ * @param {string} topologyValue - Network topology type ('simple' | 'gateway')
  * @returns {Promise<{test_id: string}>}
  */
-export async function submitTest(ruleText, packetSpec) {
+export async function submitTest(ruleText, packetsList, topologyValue) {
   const response = await fetch(`${API_BASE}/test`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       rules: ruleText,
-      packet: packetSpec,
+      packets: packetsList,
+      topology: topologyValue,
     }),
   })
 

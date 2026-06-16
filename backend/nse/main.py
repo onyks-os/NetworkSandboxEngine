@@ -68,11 +68,12 @@ def create_app(dev_mode: bool = False) -> FastAPI:
     app.include_router(routes.router, prefix="/api")
     app.include_router(websocket.router)
 
-    # In production, serve the compiled Svelte dist from FastAPI itself.
-    # The directory may not exist yet during development, so we guard.
-    import os
+    # Try the packaged dist first (nested inside the package for wheel installs)
+    dist_path = os.path.join(os.path.dirname(__file__), "dist")
+    if not os.path.isdir(dist_path):
+        # Fall back to the relative path in the source repo
+        dist_path = os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "dist")
 
-    dist_path = os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "dist")
     if not dev_mode and os.path.isdir(dist_path):
         app.mount("/", StaticFiles(directory=dist_path, html=True), name="static")
 
