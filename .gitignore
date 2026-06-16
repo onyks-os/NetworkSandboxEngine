@@ -216,3 +216,24 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ============================================================
+# NSE — Frontend (Node.js / Vite / Svelte)
+# ============================================================
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/.svelte-kit/
+
+# ============================================================
+# NSE — Runtime artifacts
+# ============================================================
+# Temporary nftables rule files written by the daemon
+/tmp/nse_rules_*.nft
+
+# ============================================================
+# NSE — OS / editor
+# ============================================================
+*.DS_Store
+
+.vscode
