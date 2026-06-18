@@ -1,25 +1,29 @@
 """
 Pydantic models for trace events streamed over WebSocket.
-
-TraceEvent is serialised to JSON and sent to the frontend over the WS
-connection.  The frontend uses the `type` discriminator to determine which
-visual update to apply to the Pipeline component.
-
-Event types
------------
-* ``hook``    — packet entered a chain (prerouting, input, forward, output…)
-* ``match``   — a rule was evaluated (with or without a verdict)
-* ``verdict`` — final chain verdict (ACCEPT, DROP, REJECT, CONTINUE…)
-* ``error``   — pipeline error (sent before the "done" sentinel)
-* ``done``    — signals end of test (sent by the WebSocket handler, not here)
-* ``ping``    — keep-alive (no visual effect)
 """
 
 from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+try:
+    from pydantic import BaseModel, Field
+
+    HAS_PYDANTIC = True
+except ImportError:
+
+    class BaseModel:
+        def __init__(self, **kwargs) -> None:
+            for k, v in kwargs.items():
+                setattr(self, k, v)
+
+    def Field(*args, **kwargs):
+        class FieldInfo:
+            pass
+
+        return FieldInfo()
+
+    HAS_PYDANTIC = False
 
 
 class TraceEvent(BaseModel):
@@ -86,5 +90,4 @@ class TestStatusResponse(BaseModel):
     status: Literal["pending", "running", "done", "error"]
 
 
-# Type alias used by the controller for clarity
 TestStatus = Literal["pending", "running", "done", "error"]

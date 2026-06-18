@@ -1,20 +1,5 @@
 """
 Test pipeline — orchestrates a single NSE test run.
-
-IMPORTANT — asyncio + blocking subprocess:
-All subprocess calls (ip, nft, scapy) are blocking.  Running them directly
-in the event loop would freeze it and prevent the TraceHarvester's _read_loop
-from ever getting scheduled.  Every blocking call is therefore wrapped with
-``loop.run_in_executor(None, ...)`` to offload to the default ThreadPoolExecutor.
-
-Lifecycle:
-    1. Create netns + veth pair        (executor)
-    2. Load nftables rules             (executor)
-    3. Start nft monitor trace         (async subprocess, in event loop)
-    4. Small sleep → let nft start up
-    5. Inject packet via Scapy         (executor)
-    6. Await harvester task            ← THIS is what drains trace events
-    7. Teardown netns                  (executor, finally)
 """
 
 from __future__ import annotations
@@ -25,20 +10,33 @@ from typing import TYPE_CHECKING
 
 from nse.core.rule_engine import RuleEngine, RuleValidationError
 from nse.core.scapy_injector import ScapyInjector
-from nse.core.trace_harvester import TraceHarvester
-from nse.models.trace_event import TraceEvent
-from nse.models.test_request import TopologyType
-from nse.core.mock_listener import start_mock_listener
+
+try:
+    from nse.models.trace_event import TraceEvent
+    from nse.models.test_request import TopologyType
+except ImportError:
+    TraceEvent = None
+
+    class TopologyType:
+        SIMPLE = "simple"
+        GATEWAY = "gateway"
+
+
+try:
+    from gui.daemon.trace_harvester import TraceHarvester
+    from gui.daemon.mock_listener import start_mock_listener
+except ImportError:
+    TraceHarvester = None
+    start_mock_listener = None
 
 if TYPE_CHECKING:
     from nse.core.netns_controller import NetnsController, TestRun
 
 logger = logging.getLogger("nse.core.pipeline")
 
-_VETH_PEER = "veth-nse"   # lives inside the netns
+_VETH_PEER = "veth-nse"  # lives inside the netns
 
 # How long to wait for trace events after packet injection (seconds).
-# nft monitor trace can take a moment to emit output.
 _TRACE_TIMEOUT = 5.0
 
 # How long to let `nft monitor trace` initialise before injecting the packet.
@@ -50,10 +48,19 @@ def parse_conntrack_line(line: str) -> dict | None:
     if len(parts) < 6:
         return None
     proto = parts[2]
-    
+
     state = None
     if proto == "tcp":
-        tcp_states = {"ESTABLISHED", "SYN_SENT", "SYN_RECV", "FIN_WAIT", "TIME_WAIT", "CLOSE", "CLOSE_WAIT", "LAST_ACK"}
+        tcp_states = {
+            "ESTABLISHED",
+            "SYN_SENT",
+            "SYN_RECV",
+            "FIN_WAIT",
+            "TIME_WAIT",
+            "CLOSE",
+            "CLOSE_WAIT",
+            "LAST_ACK",
+        }
         for p in parts[4:7]:
             if p in tcp_states:
                 state = p
@@ -65,7 +72,7 @@ def parse_conntrack_line(line: str) -> dict | None:
 
     src, dst = None, None
     sport, dport = None, None
-    
+
     for p in parts:
         if p.startswith("src=") and not src:
             src = p.split("=")[1]
@@ -75,7 +82,7 @@ def parse_conntrack_line(line: str) -> dict | None:
             sport = int(p.split("=")[1])
         elif p.startswith("dport=") and not dport:
             dport = int(p.split("=")[1])
-            
+
     if src and dst:
         return {
             "proto": proto.upper(),
@@ -83,19 +90,20 @@ def parse_conntrack_line(line: str) -> dict | None:
             "src": src,
             "dst": dst,
             "sport": sport,
-            "dport": dport
+            "dport": dport,
         }
     return None
 
 
 def read_conntrack_table(netns: str) -> list[dict]:
     import subprocess
+
     try:
         res = subprocess.run(
             ["ip", "netns", "exec", netns, "cat", "/proc/net/nf_conntrack"],
             capture_output=True,
             text=True,
-            check=True
+            check=True,
         )
         lines = res.stdout.strip().split("\n")
     except Exception:
@@ -104,12 +112,12 @@ def read_conntrack_table(netns: str) -> list[dict]:
                 ["ip", "netns", "exec", netns, "cat", "/proc/net/ip_conntrack"],
                 capture_output=True,
                 text=True,
-                check=True
+                check=True,
             )
             lines = res.stdout.strip().split("\n")
         except Exception:
             return []
-            
+
     entries = []
     for line in lines:
         if not line.strip():
@@ -121,7 +129,18 @@ def read_conntrack_table(netns: str) -> list[dict]:
 
 
 async def run_test_pipeline(controller: "NetnsController", run: "TestRun") -> None:
-    """Full test lifecycle coroutine. Runs async inside the FastAPI event loop."""
+    """Full test lifecycle coroutine. Runs async inside the event loop."""
+    if TraceHarvester is None or start_mock_listener is None:
+        raise RuntimeError(
+            "GUI/daemon dependencies (trace_harvester, mock_listener) are missing. "
+            "Please install the GUI components or run with full dependencies."
+        )
+
+    if TraceEvent is None:
+        raise RuntimeError(
+            "Pydantic models are missing. Please install the optional CLI/GUI dependencies."
+        )
+
     netns = run.netns_name
     queue = run.event_queue
     loop = asyncio.get_event_loop()
@@ -130,7 +149,7 @@ async def run_test_pipeline(controller: "NetnsController", run: "TestRun") -> No
     is_gateway = run.request.topology == TopologyType.GATEWAY
     router_ns = f"nse_router_{run.test_id[:10]}"
     server_ns = f"nse_server_{run.test_id[:10]}"
-    
+
     rules_netns = router_ns if is_gateway else run.netns_name
     target_netns = server_ns if is_gateway else run.netns_name
 
@@ -148,7 +167,12 @@ async def run_test_pipeline(controller: "NetnsController", run: "TestRun") -> No
         # 1. Create Network Topology (blocking → executor)
         # ------------------------------------------------------------------
         if is_gateway:
-            logger.info("[%s] Setting up Gateway topology: router=%s, server=%s", run.test_id, router_ns, server_ns)
+            logger.info(
+                "[%s] Setting up Gateway topology: router=%s, server=%s",
+                run.test_id,
+                router_ns,
+                server_ns,
+            )
             await loop.run_in_executor(
                 None,
                 controller.create_gateway_topology,
@@ -173,18 +197,25 @@ async def run_test_pipeline(controller: "NetnsController", run: "TestRun") -> No
         # ------------------------------------------------------------------
         # 2. Spawn Mock Listeners on target/server namespace
         # ------------------------------------------------------------------
-        logger.info("[%s] Spawning background mock listeners inside %s", run.test_id, target_netns)
+        logger.info(
+            "[%s] Spawning background mock listeners inside %s",
+            run.test_id,
+            target_netns,
+        )
         for packet in run.request.packets:
             if packet.dst_port:
                 # Check direction: run listener if packet is incoming
                 packet_incoming = True
                 if packet.src_ip in ("10.0.0.2", "fd00::2", "10.0.2.2", "fd00:2::2"):
                     packet_incoming = False
-                
+
                 if packet_incoming:
                     bind_ip = "::" if ":" in packet.dst_ip else "0.0.0.0"
                     # Prevent duplicates
-                    if not any(l["port"] == packet.dst_port and l["proto"] == packet.protocol for l in listeners):
+                    if not any(
+                        lst["port"] == packet.dst_port and lst["proto"] == packet.protocol
+                        for lst in listeners
+                    ):
                         proc = await loop.run_in_executor(
                             None,
                             start_mock_listener,
@@ -193,11 +224,13 @@ async def run_test_pipeline(controller: "NetnsController", run: "TestRun") -> No
                             packet.dst_port,
                             bind_ip,
                         )
-                        listeners.append({
-                            "proc": proc,
-                            "port": packet.dst_port,
-                            "proto": packet.protocol,
-                        })
+                        listeners.append(
+                            {
+                                "proc": proc,
+                                "port": packet.dst_port,
+                                "proto": packet.protocol,
+                            }
+                        )
 
         # ------------------------------------------------------------------
         # 3. Load nftables rules (blocking → executor)
@@ -205,17 +238,13 @@ async def run_test_pipeline(controller: "NetnsController", run: "TestRun") -> No
         engine = RuleEngine()
         logger.info("[%s] Loading rules into netns %s", run.test_id, rules_netns)
         traced_rules = _inject_trace_flag(run.request.rules)
-        await loop.run_in_executor(
-            None, engine.load, traced_rules, rules_netns
-        )
+        await loop.run_in_executor(None, engine.load, traced_rules, rules_netns)
 
         # ------------------------------------------------------------------
         # 4. Start trace harvester (async subprocess — stays on event loop)
         # ------------------------------------------------------------------
         logger.info("[%s] Starting trace harvester on netns %s", run.test_id, rules_netns)
-        await harvester.start(
-            netns_name=rules_netns, queue=queue, timeout=_TRACE_TIMEOUT
-        )
+        await harvester.start(netns_name=rules_netns, queue=queue, timeout=_TRACE_TIMEOUT)
 
         # Let nft monitor trace initialise
         await asyncio.sleep(_WARMUP_DELAY)
@@ -225,14 +254,19 @@ async def run_test_pipeline(controller: "NetnsController", run: "TestRun") -> No
         # ------------------------------------------------------------------
         injector = ScapyInjector()
         for idx, packet in enumerate(run.request.packets):
-            logger.info("[%s] Injecting packet %d/%d", run.test_id, idx + 1, len(run.request.packets))
-            
+            logger.info(
+                "[%s] Injecting packet %d/%d",
+                run.test_id,
+                idx + 1,
+                len(run.request.packets),
+            )
+
             # Setup injection netns & interface arguments
             if is_gateway:
                 packet_incoming = True
                 if packet.src_ip in ("10.0.0.2", "fd00::2", "10.0.2.2", "fd00:2::2"):
                     packet_incoming = False
-                
+
                 if packet_incoming:
                     inject_netns = router_ns
                     inj_veth_host = veth_host
@@ -348,17 +382,6 @@ async def run_test_pipeline(controller: "NetnsController", run: "TestRun") -> No
 def _inject_trace_flag(rules: str) -> str:
     """
     Auto-prepend ``meta nftrace set 1`` after the chain declaration line.
-
-    nftables chain declarations look like:
-        type filter hook input priority 0; policy drop;
-    OR (split across tokens on a single line):
-        type filter hook input priority 0;
-
-    The regex captures the ENTIRE declaration — including the optional
-    ``policy <POL>;`` suffix — so the inserted statement ends up on its
-    own line and not concatenated with ``policy drop;``.
-
-    Skips injection if ``meta nftrace set 1`` is already present.
     """
     import re
 
@@ -366,13 +389,9 @@ def _inject_trace_flag(rules: str) -> str:
     if "meta nftrace set" in rules:
         return rules
 
-    # Match the full chain type declaration:
-    #   type <TYPE> hook <HOOK> priority <PRIO>;[ policy <POL>;]
-    # The optional policy clause is part of the captured group so the
-    # substitution places the trace statement AFTER it, not in the middle.
     pattern = re.compile(
-        r'(type\s+\w+\s+hook\s+\w+\s+priority\s+[^;]+;'   # type … priority N;
-        r'(?:[ \t]*policy\s+\w+\s*;)?)',                    # optional: policy drop;
+        r"(type\s+\w+\s+hook\s+\w+\s+priority\s+[^;]+;"  # type … priority N;
+        r"(?:[ \t]*policy\s+\w+\s*;)?)",  # optional: policy drop;
         re.MULTILINE,
     )
-    return pattern.sub(r'\1\n        meta nftrace set 1', rules)
+    return pattern.sub(r"\1\n        meta nftrace set 1", rules)

@@ -83,9 +83,7 @@ class TraceHarvester:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        self._task = asyncio.ensure_future(
-            self._read_loop(queue=queue, timeout=timeout)
-        )
+        self._task = asyncio.ensure_future(self._read_loop(queue=queue, timeout=timeout))
 
     async def _read_loop(
         self,
@@ -93,7 +91,6 @@ class TraceHarvester:
         timeout: float,
     ) -> None:
         """Read stdout line by line, parse, and push to queue."""
-        from nse.models.trace_event import TraceEvent
 
         assert self._proc is not None
         assert self._proc.stdout is not None
@@ -146,6 +143,7 @@ class TraceHarvester:
 # ---------------------------------------------------------------------------
 # Line parser
 # ---------------------------------------------------------------------------
+
 
 def _parse_line(line: str) -> "TraceEvent | None":
     """Attempt to parse a single `nft monitor trace` line into a TraceEvent."""

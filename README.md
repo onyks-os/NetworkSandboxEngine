@@ -1,211 +1,266 @@
 # Network Sandbox Engine (NSE)
 
-> A visual, deterministic firewall testing environment for `nftables` rules.
+A headless Python engine for deterministic, kernel-level `nftables` firewall testing, with an optional Svelte/FastAPI web GUI.
 
-NSE uses ephemeral **Linux network namespaces** (`netns`) and **Scapy** to validate firewall logic safely, providing real-time visual feedback via a **Svelte / FastAPI** interface. Rules are executed by the actual Linux kernel, with zero userspace simulation.
+[![PyPI](https://img.shields.io/badge/PyPI-network--sandbox--engine-blue)](https://pypi.org/project/network-sandbox-engine/)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Linux only](https://img.shields.io/badge/OS-Linux%20only-lightgrey.svg)](https://kernel.org/)
+
+NSE uses ephemeral Linux network namespaces and Scapy to validate firewall logic. Rules are executed by the actual kernel: no userspace simulation, no host pollution.
 
 ---
 
-### 🚀 How It Works
+## How It Works
 
 ```text
- Svelte (Frontend)            FastAPI (Daemon)            Sandbox (Netns)
-        │                            │                            │
-        │─── 1. POST /api/test ─────►│                            │
-        │    (rules + packets seq)   │─── 2. Setup Topology ─────►│
-        │                            │    (Simple or Gateway)     │
-        │◄── 3. 202 Accepted ────────│                            │
-        │    (test_id)               │─── 4. Spawn Listeners ────►│
-        │                            │    (TCP/UDP port daemons)  │
-        │─── 5. Connect WebSocket ──►│                            │
-        │    /ws/{test_id}           │─── 6. load rules & trace ─►│
-        │                            │                            │
-        │                            │─── 7. Inject Packets ─────►│
-        │                            │    (Sequential scapy)      │
-        │                            │                            │
-        │                            │◄── 8. Poll Conntrack ──────│
-        │◄── 9. Stream Trace/CT ─────│    (cat /proc/net/ct)      │
-        │    (WebSocket JSON)        │                            │
-        │                            │─── 10. Teardown (GC) ─────►│
-        ▼                            ▼                            ▼
+ [Library / CLI]            [FastAPI Daemon (optional)]     [Sandbox - Linux netns]
+        |                              |                              |
+        |-- run_test_pipeline() ------>|                              |
+        |   (rules + packet sequence)  |-- 1. Create topology ------->| (veth pair / gateway)
+        |                              |-- 2. Spawn mock listeners -->| (TCP/UDP echo daemons)
+        |                              |-- 3. Load nft rules -------->|
+        |                              |-- 4. Start nft monitor ----->| (trace harvester)
+        |                              |-- 5. Inject packets -------->| (Scapy L2/L3)
+        |                              |<- 6. Poll conntrack ---------| (/proc/net/nf_conntrack)
+        |<-- TraceEvent stream --------|-- 7. Stream verdicts ------->| (WebSocket or iterator)
+        |                              |-- 8. Teardown (GC) --------->| (namespace deleted)
 ```
 
-The host firewall is **never touched** - rules live and die inside the isolated sandbox namespace.
+The host firewall is never modified. Rules are confined to the isolated sandbox namespace and are destroyed with it at teardown.
 
 ---
 
-## 🛠️ Architecture Overview
+## Architecture Overview
 
-| Component            | Technology          | Description                                                                       |
-| -------------------- | ------------------- | --------------------------------------------------------------------------------- |
-| **Frontend**         | Svelte + Vite       | Rule Editor, Multi-Packet Crafter, and the animated Trace + Conntrack visualizer  |
-| **Backend Daemon**   | FastAPI + Uvicorn   | Runs as `root`. Manages namespaces, configures routing tables, and runs tests     |
-| **Packet Injection** | Scapy (Layer 2/3)   | Supports both IPv4 and IPv6 packet sequences (TCP flags, ICMP, ICMPv6, UDP)       |
-| **Mock Listeners**   | TCP/UDP echo sockets| Auto-spawns background port listeners inside namespaces to simulate responders    |
-| **Conntrack Engine** | `/proc/net/conntrack` | Captures active connection states (e.g., ESTABLISHED) and streams them dynamically|
-| **CLI Test Runner**  | `nse test` (YAML)   | Headless test suite runner for CI/CD pipelines                                    |
+| Component              | Technology               | Description                                                                   |
+| ---------------------- | ------------------------ | ----------------------------------------------------------------------------- |
+| Headless Core          | Python 3.10+ / Scapy     | `NetnsController`, `PCAPAsserter`, `RuleEngine`, `ScapyInjector`, `Pipeline`  |
+| CLI Test Runner        | `nse-runner` / YAML      | Headless YAML test suite runner for CI/CD pipelines                           |
+| GUI Daemon (optional)  | FastAPI + Uvicorn        | REST and WebSocket API streaming `TraceEvent` objects from the kernel         |
+| Frontend (optional)    | Svelte + Vite            | Rule editor, multi-packet crafter, animated trace visualizer, conntrack table |
+| Packet Injection       | Scapy (Layer 2/3)        | IPv4 and IPv6, TCP with custom flags, UDP, ICMP, ICMPv6                       |
+| Mock Listeners         | TCP/UDP echo sockets     | Background listeners inside namespaces to complete handshakes                 |
+| Conntrack Engine       | `/proc/net/nf_conntrack` | Captures `ESTABLISHED`, `SYN_SENT`, `TIME_WAIT` states in real-time          |
 
 ---
 
-## 📋 Prerequisites
+## Prerequisites
 
-NSE requires a Linux machine running a kernel with namespace and `nftables` trace support (Kernel 5.4+).
+NSE requires Linux with kernel 5.4 or later (namespace and nftables trace support).
 
-| Tool / Dependency      | Purpose                                   |
-| ---------------------- | ----------------------------------------- |
-| **Python 3.10+**       | Runs the backend API daemon & CLI runner  |
-| **Node.js 18+**        | Builds and runs the Svelte web interface  |
-| **`nftables` (`nft`)** | Compiles rules and generates trace events |
-| **`iproute2` (`ip`)**  | Manages network namespaces and veth pairs |
+| Dependency        | Purpose                                    |
+| ----------------- | ------------------------------------------ |
+| Python 3.10+      | Core library, CLI, and optional GUI daemon |
+| nftables (`nft`)  | Compiles rules and generates trace events  |
+| iproute2 (`ip`)   | Manages network namespaces and veth pairs  |
+| conntrack         | Reads connection state from kernel tables  |
+| Node.js 18+       | Required only to build the Svelte frontend |
 
-Install system utilities (Debian/Ubuntu):
 ```bash
-sudo apt update
+# Debian / Ubuntu
 sudo apt install nftables iproute2 python3-venv python3-pip conntrack
 ```
 
 ---
 
-## ⚡ Quickstart
+## Quickstart
 
-Follow these steps to bootstrap and run NSE in development mode:
+### A. Headless library
 
-### 1. Bootstrap the Environment
-Clone the repository and run the setup script to create the Python virtual environment and install Node modules:
+```bash
+pip install network-sandbox-engine
+```
+
+```python
+import asyncio
+from nse.core.pipeline import run_test_pipeline
+from nse.models.test_request import PacketSpec, TestRequest
+
+async def main():
+    req = TestRequest(
+        rules="table ip filter { chain input { type filter hook input priority 0; tcp dport 22 accept; drop; } }",
+        packets=[PacketSpec(protocol="tcp", src_ip="10.0.0.1", dst_ip="10.0.0.2", dst_port=22)],
+    )
+    events = await run_test_pipeline(req)
+    for ev in events:
+        print(ev)
+
+asyncio.run(main())
+```
+
+### B. CLI YAML runner
+
+```bash
+pip install "network-sandbox-engine[cli]"
+nse-runner --file my_tests.yaml
+```
+
+```yaml
+# my_tests.yaml
+- name: SSH accepted
+  rules: |
+    table ip filter {
+      chain input { type filter hook input priority 0; tcp dport 22 accept; drop; }
+    }
+  packets:
+    - protocol: tcp
+      src_ip: 10.0.0.1
+      dst_ip: 10.0.0.2
+      dst_port: 22
+  expect:
+    verdict: ACCEPT
+```
+
+### C. Full GUI (development mode)
+
 ```bash
 git clone https://github.com/onyks-os/NetworkSandboxEngine.git
 cd NetworkSandboxEngine
-make setup
+make setup     # bootstrap venv + npm install
+make backend   # starts FastAPI daemon (requires sudo -E)
+make frontend  # starts Vite dev server on port 5173
 ```
 
-### 2. Start the Backend Daemon (Terminal 1)
-The daemon requires root privileges to manage namespaces and inject raw packets. Run it with `sudo -E` to preserve the environment path to your virtual environment:
-```bash
-make backend
-# Or run manually:
-# sudo -E .venv/bin/python -m nse serve --dev
-```
-*The daemon will start and bind to `http://127.0.0.1:8000` over TCP.*
-
-### 3. Start the Frontend Dev Server (Terminal 2)
-Run the Vite development server as a normal (non-root) user:
-```bash
-make frontend
-# Or run manually:
-# cd frontend && npm run dev
-```
-Open **[http://localhost:5173](http://localhost:5173)** in your browser.
+Open `http://localhost:5173` in a browser.
 
 ---
 
-## 🎯 Key Features & Mechanics
+## Repository Layout
 
-### 1. Stateful Packet Sequences & Conntrack Table
-NSE lets you craft sequence lists of packets to simulate active flows (such as a TCP 3-way handshake). The engine polls `/proc/net/nf_conntrack` and updates the visual **Conntrack Table** in real-time, matching states like `SYN_SENT`, `ESTABLISHED`, or `TIME_WAIT`.
+```
+NetworkSandboxEngine/
+|-- nse/                        # PyPI package (pip install network-sandbox-engine)
+|   |-- __init__.py             # Public API: NetnsController, PCAPAsserter
+|   |-- core/                   # Kernel-level primitives
+|   |   |-- netns_controller.py
+|   |   |-- scapy_injector.py
+|   |   |-- sniffer.py          # PCAPAsserter
+|   |   |-- pipeline.py         # run_test_pipeline()
+|   |   `-- rule_engine.py      # nft load / validate
+|   |-- models/                 # Pydantic models (lazy import via try/except)
+|   |   |-- test_request.py     # PacketSpec, TestRequest, TopologyType
+|   |   `-- trace_event.py      # TraceEvent
+|   `-- cli/
+|       `-- runner.py           # nse-runner entrypoint
+|
+|-- gui/                        # Not on PyPI - GUI daemon only
+|   |-- server.py               # FastAPI + Uvicorn entrypoint
+|   |-- api/                    # REST routes and WebSocket
+|   `-- daemon/                 # trace_harvester, mock_listener
+|       `-- gui_svelte/         # Svelte + Vite frontend
+|
+|-- tests/
+|   `-- test_netns.py           # 20 unit tests (2 skipped without root)
+|
+|-- pyproject.toml              # Build config - packages only nse/
+|-- Makefile                    # make setup | test | lint | release
+`-- conftest.py                 # Root sys.path for pytest
+```
+
+---
+
+## Key Features
+
+### 1. Stateful Packet Sequences and Conntrack
+
+Ordered lists of packets simulate TCP flows. NSE polls `/proc/net/nf_conntrack` and streams live connection states (`SYN_SENT`, `ESTABLISHED`, `TIME_WAIT`) after each injection.
 
 ### 2. Automatic Mock Listeners
-When you define a packet targeting a port (e.g. TCP port 80), the engine automatically spins up a background echo listener daemon inside the namespace. This daemon accepts connections and echoes payloads, generating valid TCP handshakes and conntrack table updates.
 
-### 3. Gateway Routing TOPOLOGY
-In addition to the simple point-to-point topology, you can select the **Gateway Topology** to spawn a **Host ◄─► Router ◄─► Server** setup. Firewall rules are loaded into the intermediate Router namespace to test forwarding hook rules (`forward` chain) and transit routing.
+Destination ports in incoming packets receive a background echo listener spawned inside the namespace, completing TCP handshakes and generating valid conntrack entries without manual setup.
 
-### 4. Dual-Stack IPv4/IPv6 Support
-Fully supports IPv6 packet construction (including ICMPv6 echo requests). Link interfaces are configured with both IPv4 and IPv6 subnets by default, and DAD (Duplicate Address Detection) is disabled globally inside namespaces to prevent interface initialization delays.
+### 3. Gateway Routing Topology
+
+The Gateway Topology spawns a three-namespace chain: Host - Router - Server. Rules are loaded into the Router namespace to test `forward` chain hooks, routing decisions, and NAT.
+
+### 4. Dual-Stack IPv4 and IPv6
+
+ICMPv6 echo, dual-stack veth links, and DAD disabled for instant address availability inside namespaces.
+
+### 5. PCAP Assertions
+
+`PCAPAsserter` wraps Scapy's `AsyncSniffer` to arm a BPF filter on a veth interface and assert captured packets. It is usable independently of the full pipeline.
 
 ---
 
-## 🧪 Testing
+## Testing
 
-### Running Unit Tests (Non-Root)
-NSE has a robust test suite that validates the controller, scapy injector, and conntrack state machine:
+Unit tests (no root required):
+
 ```bash
 make test
-# Or run manually:
-# .venv/bin/pytest
+# 20 passed, 2 skipped (root-only integration tests)
 ```
-*(Runs 20 unit tests, warning-free)*
 
-### Running Headless CLI Test Suite (Root Required)
-You can run automated YAML-based test suites using the `nse test` subcommand:
+Integration tests (root required):
+
 ```bash
-sudo PYTHONPATH=backend .venv/bin/python -m nse.cli test --file backend/tests/test_suite.yaml
+sudo -E .venv/bin/pytest tests/ -v
 ```
-This is ideal for running automated assertions inside CI/CD pipelines (GitHub Actions, GitLab CI, etc.).
+
+CLI test suite (root required):
+
+```bash
+sudo -E .venv/bin/python -m nse.cli.runner --file tests/fixtures/test_suite.yaml
+```
 
 ---
 
-## 📦 Production Deployment & Releases
+## Production Deployment
 
-We support two deployment models: **Native Python Installation** (via packages) and **Docker Containerization**.
+### Package Extras
 
-### 1. Automated Release Packaging (`make release`)
+| Mode           | Install command                             | Dependencies           |
+| :------------- | :------------------------------------------ | :--------------------- |
+| Headless core  | `pip install network-sandbox-engine`        | `scapy`                |
+| With CLI runner | `pip install "network-sandbox-engine[cli]"` | + `pydantic`, `pyyaml` |
 
-To build all release artifacts at once, run:
+The GUI daemon is not distributed via PyPI. It is run from a repository clone.
+
+### Building Release Artifacts
+
 ```bash
 make release
 ```
 
-This automated target:
-1. Compiles the Svelte frontend into static assets (`frontend/dist/`).
-2. Copies these assets into the Python package (`backend/nse/dist/`) so the frontend is fully self-contained.
-3. Builds the Python package wheel (`.whl`) and source distribution (`.tar.gz`) inside the `release/` directory.
-4. Copies the deployment templates (`Dockerfile` and `scripts/nse.service`) into the `release/` directory.
-5. Computes `SHA256SUMS` and automatically prompts your local GPG agent to generate a signed signature file `SHA256SUMS.asc`.
+This target performs the following steps:
 
-The final release files can be found in the root **`release/`** directory:
-* **`nse-1.0.0-py3-none-any.whl`**: The python wheel package containing the backend + embedded offline UI.
-* **`nse-1.0.0.tar.gz`**: The source distribution.
-* **`Dockerfile`**: For Docker container deployment.
-* **`nse.service`**: The systemd service unit template for native service management.
-* **`SHA256SUMS`**: Verification hashes.
-* **`SHA256SUMS.asc`**: Authenticity signature signed with your GPG key.
+1. Runs `make lint` and `make test`; fails on any error.
+2. Builds `.whl` and `.tar.gz` with `python -m build`.
+3. Copies `Dockerfile` and `scripts/nse.service` into `release/`.
+4. Generates `SHA256SUMS`.
+5. Signs `SHA256SUMS` with GPG, producing `SHA256SUMS.asc`. The signing key is auto-detected from the keyring; it can be overridden with `GPG_KEY_ID=<id>`.
 
----
+Output in `release/`:
 
-### 2. Option A: Native Python Installation
-
-To install and run natively on your host Linux system:
-
-#### A.1 Install the Wheel Package
-Install the packaged wheel using pip:
-```bash
-sudo pip install release/nse-1.0.0-py3-none-any.whl
+```
+release/
+|-- network_sandbox_engine-1.0.0-py3-none-any.whl
+|-- network_sandbox_engine-1.0.0.tar.gz
+|-- Dockerfile
+|-- nse.service
+|-- SHA256SUMS
+`-- SHA256SUMS.asc
 ```
 
-#### A.2 Run the Service via Systemd
-1. Copy the systemd unit file to the system directory:
-   ```bash
-   sudo cp release/nse.service /etc/systemd/system/
-   ```
-2. Reload systemd, enable and start the service:
-   ```bash
-   sudo systemctl daemon-reload
-   sudo systemctl enable nse
-   sudo systemctl start nse
-   ```
-   *The native service will start and bind to `/run/nse.sock`.*
+### Native Installation with Systemd
 
----
+```bash
+sudo pip install release/network_sandbox_engine-1.0.0-py3-none-any.whl
+sudo cp release/nse.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now nse
+```
 
-### 3. Option B: Docker Container Deployment
+### Docker
 
-To build and run the daemon in an isolated Docker container:
-
-#### B.1 Build the Docker Image
-Build the container image using the packaged `Dockerfile`:
 ```bash
 docker build -t nse -f release/Dockerfile .
-```
-
-#### B.2 Run the Container
-Running the sandbox engine requires netns and networking privileges. You must run the container with `--privileged` (or `--cap-add=NET_ADMIN`):
-```bash
 docker run --privileged -p 8000:8000 -d --name nse-container nse
 ```
-*Access the interface in your browser at `http://localhost:8000`.*
 
 ---
 
-## 📄 License
+## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT. See [LICENSE](LICENSE).

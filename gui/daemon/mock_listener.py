@@ -31,6 +31,7 @@ def run_tcp_server(host: str, port: int) -> None:
     while True:
         try:
             conn, addr = s.accept()
+
             # Handle client in a daemon thread
             def handle_client(c: socket.socket) -> None:
                 try:
@@ -44,6 +45,7 @@ def run_tcp_server(host: str, port: int) -> None:
                     pass
                 finally:
                     c.close()
+
             t = threading.Thread(target=handle_client, args=(conn,), daemon=True)
             t.start()
         except KeyboardInterrupt:
@@ -80,11 +82,20 @@ def start_mock_listener(
 ) -> subprocess.Popen:
     """Spawns a mock listener inside the namespace in a background process."""
     cmd = [
-        "ip", "netns", "exec", netns_name,
-        sys.executable, "-u", "-m", "nse.core.mock_listener",
-        "--proto", proto.lower(),
-        "--port", str(port),
-        "--host", host,
+        "ip",
+        "netns",
+        "exec",
+        netns_name,
+        sys.executable,
+        "-u",
+        "-m",
+        "nse.core.mock_listener",
+        "--proto",
+        proto.lower(),
+        "--port",
+        str(port),
+        "--host",
+        host,
     ]
     logger.info("Spawning listener inside %s: %s", netns_name, " ".join(cmd))
     proc = subprocess.Popen(

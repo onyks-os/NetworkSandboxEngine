@@ -1,17 +1,34 @@
 """
 Pydantic models for incoming test requests.
-
-TestRequest is the top-level body for POST /api/test.
-PacketSpec describes the L3/L4 properties of the packet to forge.
 """
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Literal
 from enum import Enum
-
-from pydantic import BaseModel, Field, field_validator
 import ipaddress
+
+try:
+    from pydantic import BaseModel, Field, field_validator
+
+    HAS_PYDANTIC = True
+except ImportError:
+    # Dummy mock classes if pydantic is not installed
+    class BaseModel:
+        def __init__(self, **kwargs) -> None:
+            for k, v in kwargs.items():
+                setattr(self, k, v)
+
+    def Field(*args, **kwargs):
+        class FieldInfo:
+            pass
+
+        return FieldInfo()
+
+    def field_validator(*args, **kwargs):
+        return lambda func: func
+
+    HAS_PYDANTIC = False
 
 
 class TopologyType(str, Enum):
@@ -56,23 +73,25 @@ class PacketSpec(BaseModel):
         examples=[["S"]],
     )
 
-    @field_validator("src_ip", "dst_ip")
-    @classmethod
-    def validate_ip(cls, v: str) -> str:
-        try:
-            ipaddress.ip_address(v)
-        except ValueError as exc:
-            raise ValueError(f"Invalid IP address (must be IPv4 or IPv6): {v!r}") from exc
-        return v
+    if HAS_PYDANTIC:
 
-    @field_validator("tcp_flags")
-    @classmethod
-    def validate_tcp_flags(cls, flags: list[str]) -> list[str]:
-        valid = {"F", "S", "R", "P", "A", "U", "E", "C"}
-        for f in flags:
-            if f.upper() not in valid:
-                raise ValueError(f"Invalid TCP flag: {f!r}. Valid: {valid}")
-        return [f.upper() for f in flags]
+        @field_validator("src_ip", "dst_ip")
+        @classmethod
+        def validate_ip(cls, v: str) -> str:
+            try:
+                ipaddress.ip_address(v)
+            except ValueError as exc:
+                raise ValueError(f"Invalid IP address (must be IPv4 or IPv6): {v!r}") from exc
+            return v
+
+        @field_validator("tcp_flags")
+        @classmethod
+        def validate_tcp_flags(cls, flags: list[str]) -> list[str]:
+            valid = {"F", "S", "R", "P", "A", "U", "E", "C"}
+            for f in flags:
+                if f.upper() not in valid:
+                    raise ValueError(f"Invalid TCP flag: {f!r}. Valid: {valid}")
+            return [f.upper() for f in flags]
 
 
 class TestRequest(BaseModel):

@@ -17,9 +17,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from nse.core.netns_controller import NetnsController
 from nse.core.rule_engine import RuleEngine, RuleValidationError
-from nse.deps import get_controller
+from gui.api.deps import get_controller
 from nse.models.test_request import TestRequest
-from nse.models.trace_event import TestStatus, TestStatusResponse
+from nse.models.trace_event import TestStatusResponse
 
 logger = logging.getLogger("nse.api.routes")
 

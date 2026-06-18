@@ -1,31 +1,16 @@
 """
 ScapyInjector — forge and inject raw packets into a network namespace.
-
-The injector uses Scapy's ``sendp()`` (Layer 2) to craft packets from a
-``PacketSpec`` and fire them into the veth interface inside the target netns.
-
-How it enters the namespace
----------------------------
-Linux does not allow ``sendp()`` to directly target an interface in another
-netns from the current process.  We use ``nsenter(1)`` to re-exec a tiny
-Python one-liner that builds and sends the packet from *inside* the namespace.
-This keeps the NSE daemon process itself in the root namespace while still
-operating on the right network context.
-
-Alternatively, for future optimisation, the injector could fork and call
-``setns(2)`` via ctypes — but nsenter is simpler and auditable.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import subprocess
 import sys
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from nse.models.test_request import PacketSpec
+    from nse.models.base import PacketSpec
 
 logger = logging.getLogger("nse.core.scapy_injector")
 
@@ -42,12 +27,6 @@ class ScapyInjector:
     ) -> None:
         """
         Construct and send a packet matching *spec* inside or into *netns_name*.
-
-        Args:
-            spec:       Packet specification (protocol, IPs, ports, flags).
-            netns_name: Name of the target network namespace.
-            veth_host:  Host-side interface name.
-            veth_peer:  Namespace-side interface name.
         """
         logger.info(
             "Injecting %s packet: %s -> %s (netns=%s)",
@@ -82,13 +61,24 @@ class ScapyInjector:
             src_mac = host_mac
             dst_mac = peer_mac
             inject_interface = veth_host
-            
-            # --- IN-PROCESS OPTIMISATION ---
-            # Running this in-process avoids the 200-500ms lag caused by starting a new python
-            # interpreter and re-importing scapy in a subprocess.
+
             try:
-                logger.debug("Performing in-process L2 injection on host interface %s", inject_interface)
-                from scapy.all import Ether, IP, IPv6, TCP, UDP, ICMP, ICMPv6EchoRequest, sendp, conf
+                logger.debug(
+                    "Performing in-process L2 injection on host interface %s",
+                    inject_interface,
+                )
+                from scapy.all import (
+                    Ether,
+                    IP,
+                    IPv6,
+                    TCP,
+                    UDP,
+                    ICMP,
+                    ICMPv6EchoRequest,
+                    sendp,
+                    conf,
+                )
+
                 conf.verb = 0
 
                 proto = spec.protocol.lower()
@@ -134,10 +124,19 @@ class ScapyInjector:
                 dst_mac=dst_mac,
             )
 
-            logger.debug("Running injection inside netns %s on interface %s", netns_name, inject_interface)
+            logger.debug(
+                "Running injection inside netns %s on interface %s",
+                netns_name,
+                inject_interface,
+            )
             cmd = [
-                "ip", "netns", "exec", netns_name,
-                sys.executable, "-c", script,
+                "ip",
+                "netns",
+                "exec",
+                netns_name,
+                sys.executable,
+                "-c",
+                script,
             ]
 
             result = subprocess.run(
@@ -157,9 +156,11 @@ class ScapyInjector:
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+
 def _get_mac_address(interface: str, netns_name: str | None = None) -> str:
     """Retrieve the MAC address of a network interface (optionally in a netns)."""
     import re
+
     cmd = []
     if netns_name:
         cmd += ["ip", "netns", "exec", netns_name]
@@ -168,15 +169,15 @@ def _get_mac_address(interface: str, netns_name: str | None = None) -> str:
     result = subprocess.run(cmd, capture_output=True, text=True, check=True)
     m = re.search(r"link/ether\s+([0-9a-fA-F:]{17})", result.stdout)
     if not m:
-        raise RuntimeError(f"Could not parse MAC address for interface {interface} from: {result.stdout}")
+        raise RuntimeError(
+            f"Could not parse MAC address for interface {interface} from: {result.stdout}"
+        )
     return m.group(1)
 
 
 def _build_scapy_script(spec: "PacketSpec", interface: str, src_mac: str, dst_mac: str) -> str:
     """
     Build a self-contained Python/Scapy one-liner script.
-
-    Used when switching namespaces via `ip netns exec`.
     """
     proto = spec.protocol.lower()
     src_ip = spec.src_ip or "10.0.0.1"

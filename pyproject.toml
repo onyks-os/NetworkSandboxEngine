@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "network-sandbox-engine"
+version = "1.0.0"
+description = "Headless Python engine for isolated network namespace testing and PCAP assertions."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "onyks"},
+]
+keywords = ["networking", "namespace", "testing", "nftables", "pcap", "scapy"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: System :: Networking",
+    "Topic :: Software Development :: Testing",
+]
+dependencies = [
+    "scapy>=2.5.0",
+]
+
+[project.optional-dependencies]
+cli = [
+    "pydantic>=2.0.0",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+nse-runner = "nse.cli.runner:main"
+
+[project.urls]
+Homepage = "https://github.com/onyks-os/NetworkSandboxEngine"
+Repository = "https://github.com/onyks-os/NetworkSandboxEngine"
+Issues = "https://github.com/onyks-os/NetworkSandboxEngine/issues"
+
+[tool.setuptools.packages.find]
+include = ["nse", "nse.*"]   # Packages ONLY the core! gui/ and tests/ are excluded.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "strict"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

@@ -19,13 +19,12 @@ Connection lifecycle
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 
 from nse.core.netns_controller import NetnsController
-from nse.deps import get_controller
+from gui.api.deps import get_controller
 from nse.models.trace_event import TraceEvent
 
 logger = logging.getLogger("nse.api.websocket")
