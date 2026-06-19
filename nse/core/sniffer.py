@@ -1,5 +1,8 @@
+# Copyright (c) 2026 onyks
+# Licensed under the MIT License.
+
 """
-PCAPAsserter — packet sniffing assertion tool based on Scapy's AsyncSniffer.
+PCAPAsserter: packet sniffing assertion tool based on Scapy's AsyncSniffer.
 
 Designed for automated headless pipeline testing to verify zero-leak policies.
 """

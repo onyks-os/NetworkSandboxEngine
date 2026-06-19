@@ -1,5 +1,8 @@
+# Copyright (c) 2026 onyks
+# Licensed under the MIT License.
+
 """
-TraceHarvester — parse `nft monitor trace` output into TraceEvent objects.
+TraceHarvester: parse `nft monitor trace` output into TraceEvent objects.
 
 nft monitor trace emits lines like:
 

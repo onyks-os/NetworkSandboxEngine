@@ -1,5 +1,8 @@
+# Copyright (c) 2026 onyks
+# Licensed under the MIT License.
+
 """
-RuleEngine — inject and validate nftables rulesets inside a netns.
+RuleEngine: inject and validate nftables rulesets inside a netns.
 """
 
 from __future__ import annotations
@@ -67,7 +70,7 @@ class RuleEngine:
         Write rules to a temp file and load them inside *netns_name*.
         """
         if not netns_name:
-            raise ValueError("netns_name must be provided — refusing to inject into init_net.")
+            raise ValueError("netns_name must be provided, refusing to inject into init_net.")
 
         logger.info("Loading rules into netns %s", netns_name)
 

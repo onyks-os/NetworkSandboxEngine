@@ -1,3 +1,6 @@
+# Copyright (c) 2026 onyks
+# Licensed under the MIT License.
+
 """
 FastAPI dependency providers.
 
@@ -9,7 +12,7 @@ from __future__ import annotations
 
 from gui.api.rootd_client import RootdClient
 
-# Module-level singleton — set by server.py during app startup
+# Module-level singleton, set by server.py during app startup
 _client: RootdClient | None = None
 
 
@@ -20,7 +23,7 @@ def set_client(c: RootdClient) -> None:
 
 
 def get_client() -> RootdClient:
-    """FastAPI dependency — returns the singleton RootdClient."""
+    """FastAPI dependency: returns the singleton RootdClient."""
     if _client is None:
-        raise RuntimeError("RootdClient not initialised — server not started yet.")
+        raise RuntimeError("RootdClient not initialised, server not started yet.")
     return _client

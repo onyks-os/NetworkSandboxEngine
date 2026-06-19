@@ -1,11 +1,14 @@
+# Copyright (c) 2026 onyks
+# Licensed under the MIT License.
+
 """
 REST API routes.
 
 Endpoints
 ---------
-GET  /api/health               — liveness probe
-POST /api/test                 — submit a new test (ruleset + packet)
-GET  /api/test/{test_id}       — query test status
+GET  /api/health               : liveness probe
+POST /api/test                 : submit a new test (ruleset + packet)
+GET  /api/test/{test_id}       : query test status
 """
 
 from __future__ import annotations
@@ -47,7 +50,7 @@ async def submit_test(
     """
     test_id = uuid.uuid4().hex[:12]
 
-    # --- Rule validation (fast path — raises HTTP 400 on syntax error) ---
+    # --- Rule validation (fast path: raises HTTP 400 on syntax error) ---
     try:
         await client.validate_rules(request.rules)
     except RuleValidationError as exc:

@@ -1,3 +1,6 @@
+# Copyright (c) 2026 onyks
+# Licensed under the MIT License.
+
 """
 Tests for the NSE core headless library.
 

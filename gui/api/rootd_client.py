@@ -1,5 +1,8 @@
+# Copyright (c) 2026 onyks
+# Licensed under the MIT License.
+
 """
-RootdClient — client proxy to communicate with nse-rootd over UNIX socket.
+RootdClient: client proxy to communicate with nse-rootd over UNIX socket.
 """
 
 from __future__ import annotations

@@ -1,5 +1,8 @@
+# Copyright (c) 2026 onyks
+# Licensed under the MIT License.
+
 """
-ScapyInjector — forge and inject raw packets into a network namespace.
+ScapyInjector: forge and inject raw packets into a network namespace.
 """
 
 from __future__ import annotations

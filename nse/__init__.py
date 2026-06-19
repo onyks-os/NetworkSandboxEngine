@@ -1,3 +1,6 @@
+# Copyright (c) 2026 onyks
+# Licensed under the MIT License.
+
 from .core.netns_controller import NetnsController
 from .core.sniffer import PCAPAsserter
 

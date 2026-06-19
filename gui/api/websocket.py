@@ -1,3 +1,6 @@
+# Copyright (c) 2026 onyks
+# Licensed under the MIT License.
+
 """
 WebSocket endpoint.
 
@@ -52,4 +55,4 @@ async def trace_stream(
         try:
             await websocket.close()
         except RuntimeError:
-            pass  # Already closed by the client — this is fine
+            pass  # Already closed by the client, this is fine

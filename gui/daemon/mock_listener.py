@@ -1,3 +1,6 @@
+# Copyright (c) 2026 onyks
+# Licensed under the MIT License.
+
 """
 Mock Listeners for TCP/UDP servers inside namespaces.
 Can be run as a standalone script or imported to manage Popen processes.

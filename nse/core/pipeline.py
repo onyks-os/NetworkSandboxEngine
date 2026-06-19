@@ -1,5 +1,8 @@
+# Copyright (c) 2026 onyks
+# Licensed under the MIT License.
+
 """
-Test pipeline — orchestrates a single NSE test run.
+Test pipeline: orchestrates a single NSE test run.
 """
 
 from __future__ import annotations
@@ -247,7 +250,7 @@ async def run_test_pipeline(controller: "NetnsController", run: "TestRun") -> No
         await loop.run_in_executor(None, engine.load, traced_rules, rules_netns)
 
         # ------------------------------------------------------------------
-        # 4. Start trace harvester (async subprocess — stays on event loop)
+        # 4. Start trace harvester (async subprocess, stays on event loop)
         # ------------------------------------------------------------------
         logger.info("[%s] Starting trace harvester on netns %s", run.test_id, rules_netns)
         await harvester.start(
@@ -401,7 +404,7 @@ def _inject_trace_flag(rules: str) -> str:
     """
     import re
 
-    # Already has tracing — don't inject again
+    # Already has tracing, don't inject again
     if "meta nftrace set" in rules:
         return rules
 

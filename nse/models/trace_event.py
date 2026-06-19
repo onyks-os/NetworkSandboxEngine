@@ -1,3 +1,6 @@
+# Copyright (c) 2026 onyks
+# Licensed under the MIT License.
+
 """
 Pydantic models for trace events streamed over WebSocket.
 """

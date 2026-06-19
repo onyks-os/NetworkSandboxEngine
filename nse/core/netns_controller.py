@@ -1,5 +1,8 @@
+# Copyright (c) 2026 onyks
+# Licensed under the MIT License.
+
 """
-NetnsController — manages ephemeral Linux network namespaces.
+NetnsController: manages ephemeral Linux network namespaces.
 
 All subprocess calls use iproute2 (`ip`) and must be run as root.
 """
@@ -162,7 +165,7 @@ class NetnsController:
         try:
             _run(["ip", "netns", "del", name])
         except subprocess.CalledProcessError:
-            logger.warning("netns %s may already be gone — ignoring.", name)
+            logger.warning("netns %s may already be gone, ignoring.", name)
         self._active_ns.discard(name)
 
     @contextlib.asynccontextmanager

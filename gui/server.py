@@ -1,5 +1,8 @@
+# Copyright (c) 2026 onyks
+# Licensed under the MIT License.
+
 """
-NSE Daemon server — starts the FastAPI API + WebSocket server.
+NSE Daemon server: starts the FastAPI API + WebSocket server.
 """
 
 from __future__ import annotations
@@ -117,7 +120,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
 
     if args.dev:
-        print(f"[NSE] Development mode — binding to http://{args.host}:{args.port}")
+        print(f"[NSE] Development mode: binding to http://{args.host}:{args.port}")
         uvicorn.run(
             "gui.server:create_app" if args.reload else app,
             host=args.host,
@@ -135,7 +138,7 @@ def main() -> None:
         if os.path.exists(socket_path):
             os.unlink(socket_path)
 
-        print(f"[NSE] Production mode — binding to unix:{socket_path}")
+        print(f"[NSE] Production mode: binding to unix:{socket_path}")
         uvicorn.run(
             app,
             uds=socket_path,

@@ -1,5 +1,8 @@
+# Copyright (c) 2026 onyks
+# Licensed under the MIT License.
+
 """
-nse-rootd — privileged root daemon running JSON-RPC over UNIX socket.
+nse-rootd: privileged root daemon running JSON-RPC over UNIX socket.
 """
 
 from __future__ import annotations

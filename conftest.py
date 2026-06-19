@@ -1,5 +1,8 @@
+# Copyright (c) 2026 onyks
+# Licensed under the MIT License.
+
 """
-conftest.py — make the project root importable so that both `nse/` and `gui/`
+conftest.py: makes the project root importable so that both `nse/` and `gui/`
 are discoverable during test collection without needing to install `gui/` as a
 package.
 """
