@@ -39,6 +39,15 @@ class RuleEngine:
     Validates and loads nftables rules into a network namespace.
     """
 
+    def __init__(self, use_nsenter: bool = False) -> None:
+        self.use_nsenter = use_nsenter
+
+    def exec_prefix(self, name: str) -> list[str]:
+        if self.use_nsenter:
+            return ["nsenter", f"--net=/var/run/netns/{name}", "--"]
+        else:
+            return ["ip", "netns", "exec", name]
+
     def validate(self, rules: str) -> None:
         """
         Dry-run validation using ``nft --check``.
@@ -63,8 +72,9 @@ class RuleEngine:
         logger.info("Loading rules into netns %s", netns_name)
 
         with _temp_rules_file(rules) as path:
+            cmd = self.exec_prefix(netns_name) + ["nft", "-f", path]
             result = subprocess.run(
-                ["ip", "netns", "exec", netns_name, "nft", "-f", path],
+                cmd,
                 capture_output=True,
                 text=True,
             )
@@ -74,8 +84,9 @@ class RuleEngine:
 
     def flush(self, netns_name: str) -> None:
         """Remove all nftables rules from a namespace (safe cleanup)."""
+        cmd = self.exec_prefix(netns_name) + ["nft", "flush", "ruleset"]
         subprocess.run(
-            ["ip", "netns", "exec", netns_name, "nft", "flush", "ruleset"],
+            cmd,
             capture_output=True,
             check=False,
         )

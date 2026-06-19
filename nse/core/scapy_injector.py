@@ -18,6 +18,9 @@ logger = logging.getLogger("nse.core.scapy_injector")
 class ScapyInjector:
     """Build and inject a packet described by a PacketSpec into a netns."""
 
+    def __init__(self, use_nsenter: bool = False) -> None:
+        self.use_nsenter = use_nsenter
+
     def inject(
         self,
         spec: "PacketSpec",
@@ -42,8 +45,8 @@ class ScapyInjector:
             if veth_host.startswith("vrs-") or veth_host.startswith("vrh-"):
                 suffix = veth_host.split("-")[1]
                 host_ns = f"nse_router_{suffix}"
-            host_mac = _get_mac_address(veth_host, host_ns)
-            peer_mac = _get_mac_address(veth_peer, netns_name)
+            host_mac = _get_mac_address(veth_host, host_ns, self.use_nsenter)
+            peer_mac = _get_mac_address(veth_peer, netns_name, self.use_nsenter)
         except Exception as exc:
             logger.error("Failed to retrieve MAC addresses: %s", exc)
             raise RuntimeError(f"Failed to retrieve MAC addresses: {exc}") from exc
@@ -112,7 +115,7 @@ class ScapyInjector:
         else:
             # Outgoing: Netns -> Host.
             # Src MAC = peer, Dst MAC = host. Send on peer interface from inside netns context.
-            # Fallback to ip netns exec since we need to change namespace context.
+            # Fallback to ip netns exec / nsenter since we need to change namespace context.
             src_mac = peer_mac
             dst_mac = host_mac
             inject_interface = veth_peer
@@ -129,11 +132,12 @@ class ScapyInjector:
                 netns_name,
                 inject_interface,
             )
-            cmd = [
-                "ip",
-                "netns",
-                "exec",
-                netns_name,
+            cmd = []
+            if self.use_nsenter:
+                cmd += ["nsenter", f"--net=/var/run/netns/{netns_name}", "--"]
+            else:
+                cmd += ["ip", "netns", "exec", netns_name]
+            cmd += [
                 sys.executable,
                 "-c",
                 script,
@@ -157,13 +161,18 @@ class ScapyInjector:
 # ---------------------------------------------------------------------------
 
 
-def _get_mac_address(interface: str, netns_name: str | None = None) -> str:
+def _get_mac_address(
+    interface: str, netns_name: str | None = None, use_nsenter: bool = False
+) -> str:
     """Retrieve the MAC address of a network interface (optionally in a netns)."""
     import re
 
     cmd = []
     if netns_name:
-        cmd += ["ip", "netns", "exec", netns_name]
+        if use_nsenter:
+            cmd += ["nsenter", f"--net=/var/run/netns/{netns_name}", "--"]
+        else:
+            cmd += ["ip", "netns", "exec", netns_name]
     cmd += ["ip", "-o", "link", "show", "dev", interface]
 
     result = subprocess.run(cmd, capture_output=True, text=True, check=True)

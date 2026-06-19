@@ -7,20 +7,20 @@ the API routes and the WebSocket endpoint without creating circular imports.
 
 from __future__ import annotations
 
-from nse.core.netns_controller import NetnsController
+from gui.api.rootd_client import RootdClient
 
-# Module-level singleton — set by main.py during app startup
-_controller: NetnsController | None = None
-
-
-def set_controller(c: NetnsController) -> None:
-    """Called once from the lifespan context manager in main.py."""
-    global _controller
-    _controller = c
+# Module-level singleton — set by server.py during app startup
+_client: RootdClient | None = None
 
 
-def get_controller() -> NetnsController:
-    """FastAPI dependency — returns the singleton NetnsController."""
-    if _controller is None:
-        raise RuntimeError("NetnsController not initialised — server not started yet.")
-    return _controller
+def set_client(c: RootdClient) -> None:
+    """Called once from the lifespan context manager in server.py."""
+    global _client
+    _client = c
+
+
+def get_client() -> RootdClient:
+    """FastAPI dependency — returns the singleton RootdClient."""
+    if _client is None:
+        raise RuntimeError("RootdClient not initialised — server not started yet.")
+    return _client

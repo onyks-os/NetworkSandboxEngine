@@ -79,13 +79,15 @@ def start_mock_listener(
     proto: str,
     port: int,
     host: str = "::",
+    use_nsenter: bool = False,
 ) -> subprocess.Popen:
     """Spawns a mock listener inside the namespace in a background process."""
-    cmd = [
-        "ip",
-        "netns",
-        "exec",
-        netns_name,
+    cmd = []
+    if use_nsenter:
+        cmd += ["nsenter", f"--net=/var/run/netns/{netns_name}", "--"]
+    else:
+        cmd += ["ip", "netns", "exec", netns_name]
+    cmd += [
         sys.executable,
         "-u",
         "-m",

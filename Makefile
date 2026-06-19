@@ -16,19 +16,35 @@ setup:
 	@bash scripts/dev-setup.sh
 
 # ============================================================
-# Backend daemon (GUI server — requires GUI extras)
+# Backend daemon & core socket server
 # ============================================================
 
-## backend: Start the NSE daemon in development mode (binds to 127.0.0.1:8000)
-## NOTE: requires sudo -E to preserve venv for root
-backend:
-	@echo "[NSE] Starting daemon in dev mode (requires sudo -E)…"
-	sudo -E .venv/bin/python -m gui.server serve --dev
+## run-rootd: Start the privileged nse-rootd daemon (requires sudo)
+run-rootd:
+	@echo "[NSE] Starting rootd (privileged)…"
+	sudo -E .venv/bin/python -m gui.rootd
 
-## backend-reload: Same as backend, but with uvicorn --reload
-backend-reload:
-	@echo "[NSE] Starting daemon with auto-reload…"
-	sudo -E .venv/bin/python -m gui.server serve --dev --reload
+## run-web: Start the unprivileged nse-web FastAPI server (runs as normal user)
+run-web:
+	@echo "[NSE] Starting web server…"
+	.venv/bin/python -m gui.server serve --dev
+
+## run-web-reload: Start the unprivileged nse-web FastAPI server with auto-reload
+run-web-reload:
+	@echo "[NSE] Starting web server with auto-reload…"
+	.venv/bin/python -m gui.server serve --dev --reload
+
+## backend: Start both rootd and web servers (in tmux if available)
+backend:
+	@if command -v tmux &>/dev/null; then \
+		tmux new-session -d -s nse-backend 2>/dev/null || true; \
+		tmux send-keys -t nse-backend "make run-rootd" Enter; \
+		tmux split-window -h -t nse-backend; \
+		tmux send-keys -t nse-backend "make run-web" Enter; \
+		tmux attach -t nse-backend; \
+	else \
+		echo "tmux not found. Run 'make run-rootd' and 'make run-web' in separate terminals."; \
+	fi
 
 # ============================================================
 # Frontend
@@ -43,16 +59,18 @@ frontend:
 # Combined dev
 # ============================================================
 
-## dev: Launch both backend (in background) and frontend (in foreground)
+## dev: Launch rootd, web server, and frontend (in tmux if available)
 dev:
 	@if command -v tmux &>/dev/null; then \
 		tmux new-session -d -s nse-dev 2>/dev/null || true; \
-		tmux send-keys -t nse-dev "make backend" Enter; \
+		tmux send-keys -t nse-dev "make run-rootd" Enter; \
 		tmux split-window -h -t nse-dev; \
+		tmux send-keys -t nse-dev "make run-web" Enter; \
+		tmux split-window -v -t nse-dev; \
 		tmux send-keys -t nse-dev "make frontend" Enter; \
 		tmux attach -t nse-dev; \
 	else \
-		echo "tmux not found. Run 'make backend' and 'make frontend' in separate terminals."; \
+		echo "tmux not found. Run 'make run-rootd', 'make run-web', and 'make frontend' in separate terminals."; \
 		make frontend; \
 	fi
 
@@ -112,7 +130,7 @@ release: clean verify
 	cd release && sha256sum * > SHA256SUMS
 	# Generate GPG signature — always required
 	@echo "[NSE] Signing SHA256SUMS with GPG… (key: $(GPG_KEY_ID))"
-	gpg --clearsign --local-user $(GPG_KEY_ID) --output release/SHA256SUMS.asc release/SHA256SUMS
+	gpg --clearsign $(if $(GPG_KEY_ID),--local-user $(GPG_KEY_ID),) --output release/SHA256SUMS.asc release/SHA256SUMS
 	@echo "========================================================================"
 	@echo "Release preparation complete!"
 	@echo "Artifacts are stored in the 'release/' directory:"

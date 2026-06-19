@@ -66,6 +66,7 @@ class TraceHarvester:
         netns_name: str,
         queue: "asyncio.Queue[TraceEvent | None]",
         timeout: float = 10.0,
+        use_nsenter: bool = False,
     ) -> None:
         """
         Launch `nft monitor trace` inside *netns_name* and begin streaming.
@@ -74,8 +75,12 @@ class TraceHarvester:
             netns_name: The target network namespace.
             queue:      Output queue (TraceEvent or None sentinel on completion).
             timeout:    Max seconds to wait for trace events before giving up.
+            use_nsenter: Use nsenter fallback in container environments.
         """
-        cmd = ["ip", "netns", "exec", netns_name, "nft", "monitor", "trace"]
+        if use_nsenter:
+            cmd = ["nsenter", f"--net=/var/run/netns/{netns_name}", "--", "nft", "monitor", "trace"]
+        else:
+            cmd = ["ip", "netns", "exec", netns_name, "nft", "monitor", "trace"]
         logger.debug("Starting trace monitor: %s", " ".join(cmd))
 
         self._proc = await asyncio.create_subprocess_exec(

@@ -6,6 +6,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Thi
 
 ---
 
+## [1.1.0] - 2026-06-19
+
+Introducing native container environments support and a Zero-Trust Privilege Separation architecture for the web server.
+
+### Added
+
+- **Native Container Support (`nsenter` fallback)**: Added robust container detection in `nse/core/utils.py` (checking `container` env, `/.dockerenv`, `/proc/1/environ`, and `cgroup` format). Dynamic fallback from `ip netns exec` to `nsenter --net` namespace switching prevents remount errors in container runtimes.
+- **Zero-Trust Privilege Separation**:
+  - `nse-rootd` UNIX domain socket server running as root and managing network namespaces, Scapy injection, and trace harvesting. Secure `/var/run/nse-core.sock` socket is automatically chowned to `SUDO_UID`/`SUDO_GID` when run via `sudo`.
+  - `RootdClient` client proxy allowing unprivileged web server instances (`nse-web` / `gui/server.py`) to delegate low-level sandbox execution without running as root.
+- **Dedicated RPC Unit Tests**: Added asynchronous mocking test `test_rootd_rpc_communication` to verify JSON-RPC protocol between client and daemon.
+
+### Changed
+
+- **Makefile and dev-setup**: Restructured commands (`make run-rootd`, `make run-web`, `make backend`, and `make dev`) and updated startup instructions to reflect the decoupled daemon architecture.
+
+---
+
 ## [1.0.0] - 2026-06-18
 
 First stable release of the Network Sandbox Engine.
@@ -107,4 +125,5 @@ NSE v1.0.0 is published as a headless Python library (`network-sandbox-engine` o
 
 ---
 
+[1.1.0]: https://github.com/onyks-os/NetworkSandboxEngine/releases/tag/v1.1.0
 [1.0.0]: https://github.com/onyks-os/NetworkSandboxEngine/releases/tag/v1.0.0

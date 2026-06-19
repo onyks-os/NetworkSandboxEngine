@@ -117,9 +117,10 @@ nse-runner --file my_tests.yaml
 ```bash
 git clone https://github.com/onyks-os/NetworkSandboxEngine.git
 cd NetworkSandboxEngine
-make setup     # bootstrap venv + npm install
-make backend   # starts FastAPI daemon (requires sudo -E)
-make frontend  # starts Vite dev server on port 5173
+make setup      # bootstrap venv + npm install
+make run-rootd  # starts root socket daemon (requires sudo -E)
+make run-web    # starts FastAPI web server (runs as normal user)
+make frontend   # starts Vite dev server on port 5173
 ```
 
 Open `http://localhost:5173` in a browser.
@@ -236,8 +237,8 @@ Output in `release/`:
 
 ```
 release/
-|-- network_sandbox_engine-1.0.0-py3-none-any.whl
-|-- network_sandbox_engine-1.0.0.tar.gz
+|-- network_sandbox_engine-1.1.0-py3-none-any.whl
+|-- network_sandbox_engine-1.1.0.tar.gz
 |-- Dockerfile
 |-- nse.service
 |-- SHA256SUMS
@@ -247,7 +248,7 @@ release/
 ### Native Installation with Systemd
 
 ```bash
-sudo pip install release/network_sandbox_engine-1.0.0-py3-none-any.whl
+sudo pip install release/network_sandbox_engine-1.1.0-py3-none-any.whl
 sudo cp release/nse.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now nse
 ```

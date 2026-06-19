@@ -95,12 +95,17 @@ def parse_conntrack_line(line: str) -> dict | None:
     return None
 
 
-def read_conntrack_table(netns: str) -> list[dict]:
+def read_conntrack_table(netns: str, use_nsenter: bool = False) -> list[dict]:
     import subprocess
 
+    exec_cmd = (
+        ["nsenter", f"--net=/var/run/netns/{netns}", "--"]
+        if use_nsenter
+        else ["ip", "netns", "exec", netns]
+    )
     try:
         res = subprocess.run(
-            ["ip", "netns", "exec", netns, "cat", "/proc/net/nf_conntrack"],
+            exec_cmd + ["cat", "/proc/net/nf_conntrack"],
             capture_output=True,
             text=True,
             check=True,
@@ -109,7 +114,7 @@ def read_conntrack_table(netns: str) -> list[dict]:
     except Exception:
         try:
             res = subprocess.run(
-                ["ip", "netns", "exec", netns, "cat", "/proc/net/ip_conntrack"],
+                exec_cmd + ["cat", "/proc/net/ip_conntrack"],
                 capture_output=True,
                 text=True,
                 check=True,
@@ -223,6 +228,7 @@ async def run_test_pipeline(controller: "NetnsController", run: "TestRun") -> No
                             packet.protocol,
                             packet.dst_port,
                             bind_ip,
+                            controller.use_nsenter,
                         )
                         listeners.append(
                             {
@@ -235,7 +241,7 @@ async def run_test_pipeline(controller: "NetnsController", run: "TestRun") -> No
         # ------------------------------------------------------------------
         # 3. Load nftables rules (blocking → executor)
         # ------------------------------------------------------------------
-        engine = RuleEngine()
+        engine = RuleEngine(use_nsenter=controller.use_nsenter)
         logger.info("[%s] Loading rules into netns %s", run.test_id, rules_netns)
         traced_rules = _inject_trace_flag(run.request.rules)
         await loop.run_in_executor(None, engine.load, traced_rules, rules_netns)
@@ -244,7 +250,12 @@ async def run_test_pipeline(controller: "NetnsController", run: "TestRun") -> No
         # 4. Start trace harvester (async subprocess — stays on event loop)
         # ------------------------------------------------------------------
         logger.info("[%s] Starting trace harvester on netns %s", run.test_id, rules_netns)
-        await harvester.start(netns_name=rules_netns, queue=queue, timeout=_TRACE_TIMEOUT)
+        await harvester.start(
+            netns_name=rules_netns,
+            queue=queue,
+            timeout=_TRACE_TIMEOUT,
+            use_nsenter=controller.use_nsenter,
+        )
 
         # Let nft monitor trace initialise
         await asyncio.sleep(_WARMUP_DELAY)
@@ -252,7 +263,7 @@ async def run_test_pipeline(controller: "NetnsController", run: "TestRun") -> No
         # ------------------------------------------------------------------
         # 5. Inject packet sequence
         # ------------------------------------------------------------------
-        injector = ScapyInjector()
+        injector = ScapyInjector(use_nsenter=controller.use_nsenter)
         for idx, packet in enumerate(run.request.packets):
             logger.info(
                 "[%s] Injecting packet %d/%d",
@@ -293,7 +304,9 @@ async def run_test_pipeline(controller: "NetnsController", run: "TestRun") -> No
             await asyncio.sleep(0.3)
 
             # Push live conntrack table updates
-            entries = await loop.run_in_executor(None, read_conntrack_table, rules_netns)
+            entries = await loop.run_in_executor(
+                None, read_conntrack_table, rules_netns, controller.use_nsenter
+            )
             for entry in entries:
                 await queue.put(
                     TraceEvent(
