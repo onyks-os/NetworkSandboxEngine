@@ -1,0 +1,129 @@
+/**
+ * NSE Global Design System
+ *
+ * Design philosophy: dark-mode-first, glass-like surfaces, vibrant accent.
+ * Inspired by VS Code Dark+, Linear, and Vercel's dashboard aesthetic.
+ */
+
+/* --- Google Fonts are loaded via <svelte:head> in App.svelte --- */
+
+/* ============================================================
+   CSS Custom Properties (Design Tokens)
+   ============================================================ */
+:root {
+  /* Background layers */
+  --bg: #0d1117;
+  --surface-1: #161b22;
+  --surface-2: #1c2333;
+  --surface-3: #252e3e;
+
+  /* Border */
+  --border: rgba(255, 255, 255, 0.08);
+
+  /* Text */
+  --text-primary: #e6edf3;
+  --text-secondary: #8b949e;
+  --text-muted: #484f58;
+
+  /* Accent — electric indigo */
+  --accent: #7c6af7;
+  --accent-hover: #9585f9;
+  --accent-subtle: rgba(124, 106, 247, 0.12);
+  --accent-glow: rgba(124, 106, 247, 0.25);
+
+  /* Semantic colours */
+  --green: #4ade80;
+  --red: #f87171;
+  --yellow: #fbbf24;
+  --blue: #60a5fa;
+
+  /* Radius */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.5);
+}
+
+/* ============================================================
+   Reset & Base
+   ============================================================ */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  background-color: var(--bg);
+  color: var(--text-primary);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#app {
+  height: 100%;
+}
+
+/* ============================================================
+   Scrollbars (WebKit)
+   ============================================================ */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--surface-3);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* ============================================================
+   Typography helpers
+   ============================================================ */
+code {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.85em;
+  background: var(--surface-2);
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  color: var(--accent-hover);
+}
+
+/* ============================================================
+   Focus ring (accessible)
+   ============================================================ */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ============================================================
+   Selection
+   ============================================================ */
+::selection {
+  background: var(--accent-subtle);
+  color: var(--text-primary);
+}
