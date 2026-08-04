@@ -1,5 +1,10 @@
 SHELL := /bin/bash
 
+# Executables discovery (prefer .venv if present, fallback to PATH)
+PYTHON ?= $(shell if [ -f .venv/bin/python ]; then echo .venv/bin/python; else command -v python3 || echo python3; fi)
+RUFF ?= $(shell if [ -f .venv/bin/ruff ]; then echo .venv/bin/ruff; else command -v ruff || echo ruff; fi)
+TWINE ?= $(shell if [ -f .venv/bin/twine ]; then echo .venv/bin/twine; else command -v twine || echo twine; fi)
+
 # GPG key to use for signing release artifacts.
 # Auto-detected from the first available secret key; override with:
 #   make release GPG_KEY_ID=<fingerprint or email>
@@ -22,17 +27,17 @@ setup:
 ## run-rootd: Start the privileged nse-rootd daemon (requires sudo)
 run-rootd:
 	@echo "[NSE] Starting rootd (privileged)…"
-	sudo -E .venv/bin/python -m gui.rootd
+	sudo -E $(PYTHON) -m gui.rootd
 
 ## run-web: Start the unprivileged nse-web FastAPI server (runs as normal user)
 run-web:
 	@echo "[NSE] Starting web server…"
-	.venv/bin/python -m gui.server serve --dev
+	$(PYTHON) -m gui.server serve --dev
 
 ## run-web-reload: Start the unprivileged nse-web FastAPI server with auto-reload
 run-web-reload:
 	@echo "[NSE] Starting web server with auto-reload…"
-	.venv/bin/python -m gui.server serve --dev --reload
+	$(PYTHON) -m gui.server serve --dev --reload
 
 ## backend: Start both rootd and web servers (in tmux if available)
 backend:
@@ -81,12 +86,12 @@ dev:
 ## test: Run Python unit tests (no root required)
 test:
 	@echo "[NSE] Running unit tests…"
-	.venv/bin/python -m pytest tests/ -v
+	$(PYTHON) -m pytest tests/ -v
 
 ## integration-test: Run full integration tests as root
 integration-test:
 	@echo "[NSE] Running integration tests (requires sudo)…"
-	sudo -E .venv/bin/pytest tests/ -v -m "not skip"
+	sudo -E $(PYTHON) -m pytest tests/ -v -m "not skip"
 
 # ============================================================
 # Code Quality & Verification
@@ -95,14 +100,14 @@ integration-test:
 ## lint: Check Python code styling using ruff
 lint:
 	@echo "[NSE] Running static analysis checks (ruff)…"
-	.venv/bin/ruff check nse/ gui/ tests/
-	.venv/bin/ruff format --check nse/ gui/ tests/
+	$(RUFF) check nse/ gui/ tests/
+	$(RUFF) format --check nse/ gui/ tests/
 
 ## format: Automatically format Python codebase
 format:
 	@echo "[NSE] Auto-formatting python codebase (ruff)…"
-	.venv/bin/ruff check --fix nse/ gui/ tests/
-	.venv/bin/ruff format nse/ gui/ tests/
+	$(RUFF) check --fix nse/ gui/ tests/
+	$(RUFF) format nse/ gui/ tests/
 
 ## verify: Run static linting analysis and unit tests
 verify: lint test
@@ -120,9 +125,9 @@ release: clean verify
 	@echo "[NSE] Preparing release artifacts…"
 	mkdir -p release/
 	# Ensure python packaging tools are installed
-	.venv/bin/python -m pip install --upgrade build twine
+	$(PYTHON) -m pip install --upgrade build twine
 	# Build the root network-sandbox-engine package (nse/ only)
-	.venv/bin/python -m build --outdir release/
+	$(PYTHON) -m build --outdir release/
 	# Copy Dockerfile and systemd service file to release/
 	cp Dockerfile release/
 	cp scripts/nse.service release/
@@ -144,12 +149,12 @@ release: clean verify
 ## publish-test: Upload the built python packages to TestPyPI
 publish-test:
 	@echo "[NSE] Uploading package to TestPyPI…"
-	.venv/bin/twine upload --repository testpypi release/network_sandbox_engine-*.tar.gz release/network_sandbox_engine-*-py3-none-any.whl
+	$(TWINE) upload --repository testpypi release/network_sandbox_engine-*.tar.gz release/network_sandbox_engine-*-py3-none-any.whl
 
 ## publish: Upload the built python packages to PyPI
 publish:
 	@echo "[NSE] Uploading package to PyPI…"
-	.venv/bin/twine upload release/network_sandbox_engine-*.tar.gz release/network_sandbox_engine-*-py3-none-any.whl
+	$(TWINE) upload release/network_sandbox_engine-*.tar.gz release/network_sandbox_engine-*-py3-none-any.whl
 
 # ============================================================
 # Housekeeping

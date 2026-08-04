@@ -10,8 +10,8 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 
 import uvicorn
 from fastapi import FastAPI
@@ -126,7 +126,7 @@ def main() -> None:
             host=args.host,
             port=args.port,
             reload=args.reload,
-            factory=True if args.reload else False,
+            factory=bool(args.reload),
             log_level="debug",
         )
     else:

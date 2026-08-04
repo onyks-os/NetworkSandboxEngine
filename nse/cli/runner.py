@@ -1,18 +1,19 @@
 # Copyright (c) 2026 onyks
 # Licensed under the MIT License.
 
-import sys
 import argparse
-import time
 import asyncio
+import sys
+import time
 
 try:
     import yaml
     from pydantic import ValidationError
-    from nse.models.test_request import TestRequest, PacketSpec, TopologyType
-    from nse.models.trace_event import TraceEvent
+
     from nse.core.netns_controller import NetnsController, TestRun
     from nse.core.pipeline import run_test_pipeline
+    from nse.models.test_request import PacketSpec, TestRequest, TopologyType
+    from nse.models.trace_event import TraceEvent
 except ImportError:
     yaml = None
     ValidationError = None
@@ -63,7 +64,7 @@ def main() -> None:
                 data = json.load(f)
             else:
                 data = yaml.safe_load(f)
-    except Exception as e:
+    except (yaml.YAMLError, OSError, ValueError) as e:
         print(f"Error reading test suite file: {e}", file=sys.stderr)
         sys.exit(1)
 
@@ -129,7 +130,7 @@ def main() -> None:
 
         try:
             loop.run_until_complete(run_test_pipeline(controller, run))
-        except Exception as e:
+        except (RuntimeError, OSError, ValueError) as e:
             print(f"  [FAIL] Pipeline crashed with error: {e}")
             failed += 1
             continue
@@ -154,9 +155,8 @@ def main() -> None:
                     trace_id_to_verdicts[evt.trace_id] = []
                     all_seen_trace_ids.append(evt.trace_id)
 
-                if evt.type == "hook" and evt.hook:
-                    if evt.trace_id not in trace_id_to_hook:
-                        trace_id_to_hook[evt.trace_id] = evt.hook
+                if evt.type == "hook" and evt.hook and evt.trace_id not in trace_id_to_hook:
+                    trace_id_to_hook[evt.trace_id] = evt.hook
 
                 if evt.verdict:
                     trace_id_to_verdicts[evt.trace_id].append(evt.verdict.upper())

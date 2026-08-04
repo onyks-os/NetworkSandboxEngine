@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
@@ -38,7 +39,7 @@ async def health() -> dict[str, str]:
 @router.post("/test", status_code=status.HTTP_202_ACCEPTED)
 async def submit_test(
     request: TestRequest,
-    client: RootdClient = Depends(get_client),
+    client: Annotated[RootdClient, Depends(get_client)],
 ) -> dict[str, str]:
     """
     Accept a test request.
@@ -69,7 +70,7 @@ async def submit_test(
 @router.get("/test/{test_id}", response_model=TestStatusResponse)
 async def get_test_status(
     test_id: str,
-    client: RootdClient = Depends(get_client),
+    client: Annotated[RootdClient, Depends(get_client)],
 ) -> TestStatusResponse:
     """Return the current status of a test run."""
     status_info = await client.get_status(test_id)

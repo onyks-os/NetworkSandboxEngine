@@ -7,9 +7,9 @@ Pydantic models for incoming test requests.
 
 from __future__ import annotations
 
-from typing import Literal
-from enum import Enum
 import ipaddress
+from enum import Enum
+from typing import Literal
 
 try:
     from pydantic import BaseModel, Field, field_validator

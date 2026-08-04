@@ -26,7 +26,7 @@ class ScapyInjector:
 
     def inject(
         self,
-        spec: "PacketSpec",
+        spec: PacketSpec,
         netns_name: str,
         veth_host: str,
         veth_peer: str,
@@ -45,7 +45,7 @@ class ScapyInjector:
         try:
             # Detect if host interface lives in a router namespace (gateway topology)
             host_ns = None
-            if veth_host.startswith("vrs-") or veth_host.startswith("vrh-"):
+            if veth_host.startswith(("vrs-", "vrh-")):
                 suffix = veth_host.split("-")[1]
                 host_ns = f"nse_router_{suffix}"
             host_mac = _get_mac_address(veth_host, host_ns, self.use_nsenter)
@@ -74,15 +74,15 @@ class ScapyInjector:
                     inject_interface,
                 )
                 from scapy.all import (
-                    Ether,
+                    ICMP,
                     IP,
-                    IPv6,
                     TCP,
                     UDP,
-                    ICMP,
+                    Ether,
                     ICMPv6EchoRequest,
-                    sendp,
+                    IPv6,
                     conf,
+                    sendp,
                 )
 
                 conf.verb = 0
@@ -150,6 +150,7 @@ class ScapyInjector:
                 cmd,
                 capture_output=True,
                 text=True,
+                check=False,
             )
 
             if result.returncode != 0:
@@ -187,7 +188,7 @@ def _get_mac_address(
     return m.group(1)
 
 
-def _build_scapy_script(spec: "PacketSpec", interface: str, src_mac: str, dst_mac: str) -> str:
+def _build_scapy_script(spec: PacketSpec, interface: str, src_mac: str, dst_mac: str) -> str:
     """
     Build a self-contained Python/Scapy one-liner script.
     """

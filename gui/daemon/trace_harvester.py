@@ -67,7 +67,7 @@ class TraceHarvester:
     async def start(
         self,
         netns_name: str,
-        queue: "asyncio.Queue[TraceEvent | None]",
+        queue: asyncio.Queue[TraceEvent | None],
         timeout: float = 10.0,
         use_nsenter: bool = False,
     ) -> None:
@@ -95,7 +95,7 @@ class TraceHarvester:
 
     async def _read_loop(
         self,
-        queue: "asyncio.Queue[TraceEvent | None]",
+        queue: asyncio.Queue[TraceEvent | None],
         timeout: float,
     ) -> None:
         """Read stdout line by line, parse, and push to queue."""
@@ -131,8 +131,8 @@ class TraceHarvester:
                     logger.debug("TraceEvent: %s", event)
                     await queue.put(event)
 
-        except Exception as exc:
-            logger.exception("Error in trace read loop: %s", exc)
+        except Exception:
+            logger.exception("Error in trace read loop")
         finally:
             await queue.put(None)  # Sentinel → WebSocket sends "done"
             self.stop()
@@ -158,7 +158,7 @@ class TraceHarvester:
 # ---------------------------------------------------------------------------
 
 
-def _parse_line(line: str) -> "TraceEvent | None":
+def _parse_line(line: str) -> TraceEvent | None:
     """Attempt to parse a single `nft monitor trace` line into a TraceEvent."""
     from nse.models.trace_event import TraceEvent
 

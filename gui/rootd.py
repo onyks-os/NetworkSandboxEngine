@@ -7,12 +7,14 @@ nse-rootd: privileged root daemon running JSON-RPC over UNIX socket.
 
 from __future__ import annotations
 
+import argparse
 import asyncio
-import os
+import contextlib
 import json
 import logging
+import os
 import signal
-import argparse
+
 from nse.core.netns_controller import NetnsController
 from nse.core.rule_engine import RuleEngine, RuleValidationError
 from nse.models.test_request import TestRequest
@@ -79,7 +81,7 @@ class RootDaemon:
                                 request_obj = TestRequest.parse_obj(request_dict)
                             self.controller.enqueue_test(test_id=test_id, request=request_obj)
                             response = {"status": "ok"}
-                        except Exception as e:
+                        except (ValueError, RuntimeError) as e:
                             response = {"status": "error", "message": str(e)}
                     writer.write(json.dumps(response).encode("utf-8") + b"\n")
                     await writer.drain()
@@ -122,7 +124,7 @@ class RootDaemon:
                                 event_str = event.json()
                             writer.write(event_str.encode("utf-8") + b"\n")
                             await writer.drain()
-                        except Exception as e:
+                        except (ValueError, RuntimeError) as e:
                             response = {"type": "error", "message": str(e)}
                             writer.write(json.dumps(response).encode("utf-8") + b"\n")
                             await writer.drain()
@@ -138,14 +140,12 @@ class RootDaemon:
                     )
                     await writer.drain()
 
-        except Exception as e:
-            logger.exception("Error handling rootd client: %s", e)
+        except Exception:
+            logger.exception("Error handling rootd client")
         finally:
             writer.close()
-            try:
+            with contextlib.suppress(OSError, RuntimeError):
                 await writer.wait_closed()
-            except Exception:
-                pass
 
     async def start(self) -> None:
         if os.path.exists(self.socket_path):
@@ -162,7 +162,7 @@ class RootDaemon:
 
         try:
             os.chmod(self.socket_path, 0o600)
-        except Exception as e:
+        except OSError as e:
             logger.warning("Could not set socket permissions to 0600: %s", e)
 
         sudo_uid = os.environ.get("SUDO_UID")
@@ -173,7 +173,7 @@ class RootDaemon:
                 logger.info(
                     "Chowned socket %s to UID %s, GID %s", self.socket_path, sudo_uid, sudo_gid
                 )
-            except Exception as e:
+            except OSError as e:
                 logger.warning("Could not chown socket: %s", e)
 
         logger.info("Rootd listening on UNIX socket: %s", self.socket_path)

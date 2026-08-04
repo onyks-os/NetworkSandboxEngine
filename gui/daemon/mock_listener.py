@@ -11,10 +11,10 @@ from __future__ import annotations
 import argparse
 import logging
 import socket
+import subprocess
 import sys
 import threading
 import time
-import subprocess
 
 logger = logging.getLogger("nse.core.mock_listener")
 
@@ -27,13 +27,13 @@ def run_tcp_server(host: str, port: int) -> None:
         s.bind((host, port))
         s.listen(5)
         print(f"TCP server listening on {host}:{port}", flush=True)
-    except Exception as e:
+    except OSError as e:
         print(f"Error binding TCP to {host}:{port}: {e}", file=sys.stderr, flush=True)
         sys.exit(1)
 
     while True:
         try:
-            conn, addr = s.accept()
+            conn, _ = s.accept()
 
             # Handle client in a daemon thread
             def handle_client(c: socket.socket) -> None:
@@ -44,7 +44,7 @@ def run_tcp_server(host: str, port: int) -> None:
                         if not data:
                             break
                         c.sendall(data)
-                except Exception:
+                except OSError:
                     pass
                 finally:
                     c.close()
@@ -53,7 +53,7 @@ def run_tcp_server(host: str, port: int) -> None:
             t.start()
         except KeyboardInterrupt:
             break
-        except Exception:
+        except OSError:
             time.sleep(0.1)
 
 
@@ -63,7 +63,7 @@ def run_udp_server(host: str, port: int) -> None:
     try:
         s.bind((host, port))
         print(f"UDP server listening on {host}:{port}", flush=True)
-    except Exception as e:
+    except OSError as e:
         print(f"Error binding UDP to {host}:{port}: {e}", file=sys.stderr, flush=True)
         sys.exit(1)
 
@@ -73,7 +73,7 @@ def run_udp_server(host: str, port: int) -> None:
             s.sendto(data, addr)
         except KeyboardInterrupt:
             break
-        except Exception:
+        except OSError:
             time.sleep(0.1)
 
 

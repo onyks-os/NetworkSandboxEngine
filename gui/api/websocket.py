@@ -14,6 +14,7 @@ emits them via `nft monitor trace` and proxies them through nse-rootd.
 from __future__ import annotations
 
 import logging
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 
@@ -29,7 +30,7 @@ router = APIRouter(tags=["websocket"])
 async def trace_stream(
     websocket: WebSocket,
     test_id: str,
-    client: RootdClient = Depends(get_client),
+    client: Annotated[RootdClient, Depends(get_client)],
 ) -> None:
     """Stream trace events for a running test over WebSocket."""
     await websocket.accept()
@@ -49,7 +50,7 @@ async def trace_stream(
     except WebSocketDisconnect:
         logger.info("Client disconnected from test %s", test_id)
     except Exception as exc:
-        logger.exception("Error in WebSocket stream for test %s: %s", test_id, exc)
+        logger.exception("Error in WebSocket stream for test %s", test_id)
         await websocket.send_json({"type": "error", "message": str(exc)})
     finally:
         try:

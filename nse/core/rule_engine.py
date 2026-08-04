@@ -8,10 +8,10 @@ RuleEngine: inject and validate nftables rulesets inside a netns.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import subprocess
 import tempfile
-import os
 from dataclasses import dataclass
 
 logger = logging.getLogger("nse.core.rule_engine")
@@ -60,6 +60,7 @@ class RuleEngine:
                 ["nft", "--check", "-f", path],
                 capture_output=True,
                 text=True,
+                check=False,
             )
             if result.returncode != 0:
                 errors = _parse_nft_errors(result.stderr, path)
@@ -80,6 +81,7 @@ class RuleEngine:
                 cmd,
                 capture_output=True,
                 text=True,
+                check=False,
             )
             if result.returncode != 0:
                 errors = _parse_nft_errors(result.stderr, path)

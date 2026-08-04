@@ -10,11 +10,12 @@ All subprocess calls use iproute2 (`ip`) and must be run as root.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import subprocess
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-import contextlib
-from typing import TYPE_CHECKING, AsyncIterator
+from typing import TYPE_CHECKING
 
 from nse.core.utils import is_in_container
 
@@ -31,8 +32,8 @@ class TestRun:
 
     test_id: str
     netns_name: str
-    request: "TestRequest"
-    status: str = "running" if False else "pending"  # pending | running | done | error
+    request: TestRequest
+    status: str = "pending"  # pending | running | done | error
     event_queue: asyncio.Queue = field(default_factory=lambda: asyncio.Queue(maxsize=512))
 
 
@@ -199,10 +200,8 @@ class NetnsController:
             yield sandbox
         finally:
             # Cleanup links
-            try:
+            with contextlib.suppress(subprocess.CalledProcessError, OSError):
                 _run(["ip", "link", "del", sandbox.ext_iface])
-            except Exception:
-                pass
 
             # Cleanup netns
             self.destroy_netns(name)
@@ -534,7 +533,7 @@ class NetnsController:
     # Test run management
     # ------------------------------------------------------------------
 
-    def enqueue_test(self, test_id: str, request: "TestRequest") -> None:
+    def enqueue_test(self, test_id: str, request: TestRequest) -> None:
         """Register a new test and schedule its pipeline for execution."""
         from nse.core.pipeline import run_test_pipeline  # local import avoids cycles
 
@@ -548,7 +547,7 @@ class NetnsController:
     def has_test(self, test_id: str) -> bool:
         return test_id in self._tests
 
-    def get_status(self, test_id: str) -> "TestStatusResponse | None":
+    def get_status(self, test_id: str) -> TestStatusResponse | None:
         try:
             from nse.models.trace_event import TestStatusResponse
         except ImportError as exc:
@@ -561,12 +560,11 @@ class NetnsController:
             return None
         return TestStatusResponse(test_id=test_id, status=run.status)
 
-    def get_event_queue(self, test_id: str) -> "asyncio.Queue[TraceEvent | None]":
+    def get_event_queue(self, test_id: str) -> asyncio.Queue[TraceEvent | None]:
         return self._tests[test_id].event_queue
 
     def release_test(self, test_id: str) -> None:
         """Called by the WebSocket handler after the connection closes."""
-        pass
 
 
 # ---------------------------------------------------------------------------

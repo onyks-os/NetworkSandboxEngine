@@ -8,13 +8,14 @@ RootdClient: client proxy to communicate with nse-rootd over UNIX socket.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
 
 from nse.core.rule_engine import RuleValidationError
 from nse.models.test_request import TestRequest
-from nse.models.trace_event import TraceEvent, TestStatusResponse
+from nse.models.trace_event import TestStatusResponse, TraceEvent
 
 logger = logging.getLogger("nse.api.rootd_client")
 
@@ -44,10 +45,8 @@ class RootdClient:
                 raise RuleValidationError(response.get("errors", []))
         finally:
             writer.close()
-            try:
+            with contextlib.suppress(OSError, RuntimeError):
                 await writer.wait_closed()
-            except Exception:
-                pass
 
     async def submit_test(self, test_id: str, request: TestRequest) -> None:
         """Submit a new test run to rootd."""
@@ -71,10 +70,8 @@ class RootdClient:
                 raise RuntimeError(response.get("message", "Unknown error submitting test"))
         finally:
             writer.close()
-            try:
+            with contextlib.suppress(OSError, RuntimeError):
                 await writer.wait_closed()
-            except Exception:
-                pass
 
     async def get_status(self, test_id: str) -> TestStatusResponse | None:
         """Fetch current test status from rootd."""
@@ -101,10 +98,8 @@ class RootdClient:
             return TestStatusResponse.parse_obj(data)
         finally:
             writer.close()
-            try:
+            with contextlib.suppress(OSError, RuntimeError):
                 await writer.wait_closed()
-            except Exception:
-                pass
 
     async def stream_events(self, test_id: str) -> AsyncGenerator[TraceEvent | None, None]:
         """Stream TraceEvents from rootd for the given test."""
@@ -135,7 +130,5 @@ class RootdClient:
                         yield TraceEvent.parse_obj(data)
         finally:
             writer.close()
-            try:
+            with contextlib.suppress(OSError, RuntimeError):
                 await writer.wait_closed()
-            except Exception:
-                pass
