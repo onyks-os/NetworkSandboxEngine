@@ -143,7 +143,7 @@ def main() -> None:
             events.append(evt)
 
         trace_id_to_verdicts = {}
-        trace_id_to_hook = {}
+        trace_id_to_user_table = {}
         all_seen_trace_ids = []
         errors = []
 
@@ -155,10 +155,10 @@ def main() -> None:
                     trace_id_to_verdicts[evt.trace_id] = []
                     all_seen_trace_ids.append(evt.trace_id)
 
-                if evt.type == "hook" and evt.hook and evt.trace_id not in trace_id_to_hook:
-                    trace_id_to_hook[evt.trace_id] = evt.hook
+                if evt.table and evt.table != "nse_trace":
+                    trace_id_to_user_table[evt.trace_id] = True
 
-                if evt.verdict:
+                if evt.verdict and evt.table != "nse_trace":
                     trace_id_to_verdicts[evt.trace_id].append(evt.verdict.upper())
 
         if errors:
@@ -166,20 +166,8 @@ def main() -> None:
             failed += 1
             continue
 
-        # Keep only trace IDs that enter on the expected injection hook interface
-        ordered_trace_ids = []
-        for tid in all_seen_trace_ids:
-            hook = trace_id_to_hook.get(tid, "")
-            is_valid = False
-            if topology == TopologyType.GATEWAY:
-                if hook.startswith("vrh-") or hook == "veth-nse":
-                    is_valid = True
-            else:
-                if hook == "veth-nse":
-                    is_valid = True
-
-            if is_valid:
-                ordered_trace_ids.append(tid)
+        # Keep only trace IDs that traversed user-defined rulesets (excluding nse_trace setup noise)
+        ordered_trace_ids = [tid for tid in all_seen_trace_ids if trace_id_to_user_table.get(tid)]
 
         actual_verdicts = []
         for tid in ordered_trace_ids:

@@ -20,6 +20,15 @@ _NFT_ERROR_RE = re.compile(
     r"^(?P<file>[^:]+):(?P<line>\d+):(?P<col_range>[\d-]+):\s*(?P<level>\w+):\s*(?P<msg>.+)$"
 )
 
+_TRACE_INIT_RULESET = """
+table inet nse_trace {
+  chain nse_trace_prerouting {
+    type filter hook prerouting priority -300; policy accept;
+    meta nftrace set 1
+  }
+}
+"""
+
 
 @dataclass
 class NftError:
@@ -69,13 +78,16 @@ class RuleEngine:
     def load(self, rules: str, netns_name: str) -> None:
         """
         Write rules to a temp file and load them inside *netns_name*.
+        Automatically prepends tracing enablement (meta trace set 1).
         """
         if not netns_name:
             raise ValueError("netns_name must be provided, refusing to inject into init_net.")
 
         logger.info("Loading rules into netns %s", netns_name)
 
-        with _temp_rules_file(rules) as path:
+        full_ruleset = f"{_TRACE_INIT_RULESET}\n{rules}"
+
+        with _temp_rules_file(full_ruleset) as path:
             cmd = self.exec_prefix(netns_name) + ["nft", "-f", path]
             result = subprocess.run(
                 cmd,

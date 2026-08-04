@@ -35,7 +35,7 @@ logger = logging.getLogger("nse.core.trace_harvester")
 
 _PACKET_RE = re.compile(
     r"trace id (?P<trace_id>\w+) (?P<family>\w+) (?P<table>\w+) (?P<chain>\w+) "
-    r"packet: iif \"(?P<iif>[^\"]+)\""
+    r"packet:(?:.*?\biif \"?(?P<iif>[^\s\"]+)\"?)?"
 )
 _RULE_RE = re.compile(
     r"trace id (?P<trace_id>\w+) (?P<family>\w+) (?P<table>\w+) (?P<chain>\w+) "
@@ -172,7 +172,7 @@ def _parse_line(line: str) -> TraceEvent | None:
             family=m.group("family"),
             table=m.group("table"),
             chain=m.group("chain"),
-            hook=m.group("iif"),
+            hook=m.group("iif") or "",
             timestamp=now,
         )
 
