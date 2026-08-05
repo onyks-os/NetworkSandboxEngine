@@ -43,7 +43,7 @@ def create_app(dev_mode: bool = False, rootd_socket: str = "/var/run/nse-core.so
     app = FastAPI(
         title="Network Sandbox Engine",
         description="Deterministic nftables rule tester using Linux netns.",
-        version="1.1.0",
+        version="1.1.1",
         lifespan=_lifespan,
     )
     app.state.rootd_socket = rootd_socket

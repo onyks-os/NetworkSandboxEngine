@@ -6,6 +6,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Thi
 
 ---
 
+## [1.1.1] - 2026-08-05
+
+Kernel tracing initialization fix, background noise filtering in YAML test runner, and Makefile dynamic binary resolution.
+
+### Added
+
+- **Automatic Kernel Tracing Prepending**: Automatically inject a high-priority `table inet nse_trace` prerouting chain (`meta nftrace set 1`) in `RuleEngine.load()` to guarantee `nft monitor trace` captures trace events for all test packets.
+
+### Fixed
+
+- **YAML Runner Trace Noise Filtering**: Filtered out background setup noise (IPv6 NDP, DAD, MLD, and socket init packets) in `nse.cli.runner` to accurately match verdicts (`ACCEPT`/`DROP`) to injected test packets.
+- **`nft monitor trace` Regex Parser**: Updated `_PACKET_RE` in `gui/daemon/trace_harvester.py` to handle both quoted and unquoted `iif` strings in trace lines across different Linux kernel and `nftables` versions.
+- **Dynamic Executable Resolution in Makefile**: Updated `Makefile` to dynamically detect `PYTHON`, `RUFF`, `TWINE`, and `PYTEST` in `.venv` with automatic fallbacks to `PATH` system binaries.
+- **Ruff Code Quality Compliance**: Resolved all Ruff static analysis errors (`ASYNC221`, `I001`, `BLE001`, `UP037`, `TRY401`, `PIE790`) across `nse/`, `gui/`, and `tests/`.
+
+---
+
 ## [1.1.0] - 2026-06-19
 
 Introducing native container environments support and a Zero-Trust Privilege Separation architecture for the web server.
@@ -125,5 +142,6 @@ NSE v1.0.0 is published as a headless Python library (`network-sandbox-engine` o
 
 ---
 
+[1.1.1]: https://github.com/onyks-os/NetworkSandboxEngine/releases/tag/v1.1.1
 [1.1.0]: https://github.com/onyks-os/NetworkSandboxEngine/releases/tag/v1.1.0
 [1.0.0]: https://github.com/onyks-os/NetworkSandboxEngine/releases/tag/v1.0.0

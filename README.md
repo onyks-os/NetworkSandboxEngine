@@ -237,8 +237,8 @@ Output in `release/`:
 
 ```
 release/
-|-- network_sandbox_engine-1.1.0-py3-none-any.whl
-|-- network_sandbox_engine-1.1.0.tar.gz
+|-- network_sandbox_engine-1.1.1-py3-none-any.whl
+|-- network_sandbox_engine-1.1.1.tar.gz
 |-- Dockerfile
 |-- nse.service
 |-- SHA256SUMS
@@ -248,7 +248,7 @@ release/
 ### Native Installation with Systemd
 
 ```bash
-sudo pip install release/network_sandbox_engine-1.1.0-py3-none-any.whl
+sudo pip install release/network_sandbox_engine-1.1.1-py3-none-any.whl
 sudo cp release/nse.service /etc/systemd/system/
 sudo systemctl daemon-reload && sudo systemctl enable --now nse
 ```
