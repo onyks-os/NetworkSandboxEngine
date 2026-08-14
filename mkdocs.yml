@@ -1,0 +1,106 @@
+site_name: Network Sandbox Engine (NSE)
+site_url: https://onyks-os.github.io/NetworkSandboxEngine/
+site_description: Documentation for Network Sandbox Engine (NSE) - isolated Linux network namespace testing and kernel nftables trace evaluation.
+site_author: onyks-os
+site_dir: ../onyks-os.github.io/NetworkSandboxEngine
+docs_dir: docs/web
+repo_url: https://github.com/onyks-os/NetworkSandboxEngine
+repo_name: onyks-os/NetworkSandboxEngine
+
+theme:
+  name: material
+  language: en
+  font:
+    text: Inter
+    code: JetBrains Mono
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - toc.follow
+
+  palette:
+    # Dark mode (default)
+    - scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+      primary: custom
+      accent: custom
+      media: "(prefers-color-scheme: dark)"
+
+    # Light mode
+    - scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+      primary: custom
+      accent: custom
+      media: "(prefers-color-scheme: light)"
+
+extra_css:
+  - stylesheets/extra.css
+
+extra_javascript:
+  - https://unpkg.com/mermaid@10/dist/mermaid.min.js
+  - javascripts/mermaid_init.js
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: ["."]
+          options:
+            docstring_style: google
+            show_root_heading: true
+            show_source: true
+            heading_level: 2
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - attr_list
+  - md_in_html
+
+nav:
+  - Home: index.md
+  - Tutorials:
+      - Quickstart: tutorials/quickstart.md
+      - Test Suite YAML: tutorials/test-suites.md
+      - Ruleset Debugging: tutorials/debugging-rulesets.md
+      - Gateway Topology: tutorials/gateway-topology.md
+  - How-To Guides:
+      - In-Process GUI Integration: how-to/in-process-integration.md
+      - Custom Packet Specs: how-to/custom-packets.md
+      - CI/CD Automation: how-to/cicd-setup.md
+  - Explanation:
+      - Architecture & In-Process Model: explanation/architecture.md
+      - Deterministic Oracle: explanation/deterministic-oracle.md
+      - Namespace Lifecycle & Naming: explanation/namespace-lifecycle.md
+  - Reference:
+      - CLI Commands: reference/cli.md
+      - Core API: reference/api.md
+      - Configuration & Dependencies: reference/dependencies.md
+  - Release Notes:
+      - Changelog: release-notes/changelog.md

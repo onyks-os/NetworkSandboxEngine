@@ -10,7 +10,7 @@ def is_in_container() -> bool:
     Robustly check if the current process is running inside a container.
     """
     # 1. Check standard environment variable 'container'
-    if os.environ.get("container"):
+    if os.environ.get("CONTAINER") or os.environ.get("container"):  # noqa: SIM112
         return True
 
     # 2. Check traditional /.dockerenv file
@@ -28,7 +28,7 @@ def is_in_container() -> bool:
     # 4. Check cgroup entries (works for cgroups v1 and v2)
     with contextlib.suppress(OSError):
         if os.path.exists("/proc/1/cgroup"):
-            with open("/proc/1/cgroup", "rt") as f:
+            with open("/proc/1/cgroup") as f:
                 cgroups = f.read()
                 for runtime in ("docker", "kubepods", "containerd", "lxc"):
                     if runtime in cgroups:

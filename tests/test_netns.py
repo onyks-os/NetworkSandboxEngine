@@ -17,17 +17,15 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gui.api.rootd_client import RootdClient
-from gui.daemon.mock_listener import start_mock_listener
-from gui.daemon.trace_harvester import _parse_line as _parse_trace_line
-from gui.rootd import RootDaemon
+from nse.core.mock_listener import start_mock_listener
 from nse.core.netns_controller import NetnsController
 from nse.core.pipeline import parse_conntrack_line
 from nse.core.rule_engine import RuleEngine, RuleValidationError
 from nse.core.scapy_injector import ScapyInjector
 from nse.core.sniffer import PCAPAsserter
+from nse.core.trace_harvester import _parse_line as _parse_trace_line
 from nse.models.test_request import PacketSpec, TestRequest, TopologyType
-from nse.models.trace_event import TestStatusResponse, TraceEvent
+from nse.models.trace_event import TraceEvent
 
 # Determine if running as root
 IS_ROOT = os.geteuid() == 0
@@ -460,61 +458,3 @@ async def test_real_pcap_assertion() -> None:
 
         captured = await sniffer.stop()
         assert len(captured) >= 1
-
-
-@pytest.mark.asyncio
-async def test_rootd_rpc_communication(tmp_path) -> None:
-    socket_path = str(tmp_path / "test-nse-core.sock")
-    daemon = RootDaemon(socket_path=socket_path)
-    await daemon.start()
-
-    client = RootdClient(socket_path=socket_path)
-
-    try:
-        with (
-            patch("gui.rootd.RuleEngine") as mock_engine_cls,
-            patch.object(daemon.controller, "enqueue_test") as mock_enqueue,
-            patch.object(daemon.controller, "get_status") as mock_get_status,
-            patch.object(daemon.controller, "has_test") as mock_has_test,
-            patch.object(daemon.controller, "get_event_queue") as mock_get_event_queue,
-        ):
-            mock_engine = mock_engine_cls.return_value
-            mock_engine.validate.return_value = None
-
-            # Test validate_rules
-            await client.validate_rules("table ip filter { chain input {} }")
-            mock_engine.validate.assert_called_with("table ip filter { chain input {} }")
-
-            # Test submit_test
-            mock_enqueue.return_value = None
-            req = TestRequest(rules="rules", packets=[PacketSpec(protocol="tcp")])
-            await client.submit_test(test_id="test1", request=req)
-            mock_enqueue.assert_called_once()
-
-            # Test get_status
-            mock_get_status.return_value = TestStatusResponse(test_id="test1", status="running")
-            status_res = await client.get_status("test1")
-            assert status_res.status == "running"
-            mock_get_status.assert_called_with("test1")
-
-            # Test stream_events
-            mock_has_test.return_value = True
-            queue = asyncio.Queue()
-            mock_get_event_queue.return_value = queue
-
-            event = TraceEvent(
-                type="hook", trace_id="123", family="ip", table="filter", chain="input"
-            )
-            await queue.put(event)
-            await queue.put(None)  # Sentinel
-
-            events = []
-            async for ev in client.stream_events("test1"):
-                events.append(ev)
-
-            assert len(events) == 2
-            assert events[0].trace_id == "123"
-            assert events[1] is None
-
-    finally:
-        await daemon.shutdown()

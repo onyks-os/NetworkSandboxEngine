@@ -19,8 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from gui.api import routes, websocket
-from gui.api.deps import set_client
-from gui.api.rootd_client import RootdClient
+from nse.core.netns_controller import NetnsController
 
 logger = logging.getLogger("nse")
 
@@ -28,25 +27,28 @@ logger = logging.getLogger("nse")
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Startup / shutdown lifecycle."""
-    logger.info("NSE web daemon starting up…")
-    socket_path = getattr(app.state, "rootd_socket", "/var/run/nse-core.sock")
-    client = RootdClient(socket_path=socket_path)
-    set_client(client)
+    logger.info("NSE web server starting up…")
+    app.state.controller = NetnsController()
+    app.state.runs = {}
+    app.state.tasks = {}
 
     yield
 
-    logger.info("NSE web daemon shutting down…")
+    logger.info("NSE web server shutting down…")
+    for task in app.state.tasks.values():
+        if not task.done():
+            task.cancel()
+    app.state.controller.cleanup_all()
 
 
-def create_app(dev_mode: bool = False, rootd_socket: str = "/var/run/nse-core.sock") -> FastAPI:
+def create_app(dev_mode: bool = False) -> FastAPI:
     """Application factory."""
     app = FastAPI(
         title="Network Sandbox Engine",
         description="Deterministic nftables rule tester using Linux netns.",
-        version="1.1.1",
+        version="2.0.0",
         lifespan=_lifespan,
     )
-    app.state.rootd_socket = rootd_socket
 
     if dev_mode:
         app.add_middleware(
@@ -101,11 +103,6 @@ def main() -> None:
         help="Unix socket path for production mode (default: /run/nse.sock)",
     )
     serve_parser.add_argument(
-        "--rootd-socket",
-        default="/var/run/nse-core.sock",
-        help="Unix socket path of nse-rootd (default: /var/run/nse-core.sock)",
-    )
-    serve_parser.add_argument(
         "--reload",
         action="store_true",
         default=False,
@@ -114,7 +111,7 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    app = create_app(dev_mode=args.dev, rootd_socket=args.rootd_socket)
+    app = create_app(dev_mode=args.dev)
 
     # Setup standard logger
     logging.basicConfig(level=logging.INFO)

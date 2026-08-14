@@ -10,7 +10,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Thi
 
 Single-Process In-Process Architecture, Pydantic Hard Dependency, Deterministic Verdict Oracle, and Strict Static Typing.
 
-### ⚠️ Breaking Changes
+### Breaking Changes
 
 - **Elimination of `rootd` Daemon**: Removed socket daemon `gui/rootd.py`, `gui/api/rootd_client.py`, and `gui/api/deps.py`. FastAPI web application and `NetnsController` now run directly in-process with root privileges.
 - **Mandatory Pydantic Dependency**: `pydantic` promoted to a mandatory core dependency of `nse/`; eliminated all stdlib fallback dataclasses and stubs.
@@ -165,6 +165,7 @@ NSE v1.0.0 is published as a headless Python library (`network-sandbox-engine` o
 
 ---
 
+[2.0.0]: https://github.com/onyks-os/NetworkSandboxEngine/releases/tag/v2.0.0
 [1.1.1]: https://github.com/onyks-os/NetworkSandboxEngine/releases/tag/v1.1.1
 [1.1.0]: https://github.com/onyks-os/NetworkSandboxEngine/releases/tag/v1.1.0
 [1.0.0]: https://github.com/onyks-os/NetworkSandboxEngine/releases/tag/v1.0.0

@@ -3,6 +3,8 @@ SHELL := /bin/bash
 # Executables discovery (prefer .venv if present, fallback to PATH)
 PYTHON ?= $(shell if [ -f .venv/bin/python ]; then echo .venv/bin/python; else command -v python3 || echo python3; fi)
 RUFF ?= $(shell if [ -f .venv/bin/ruff ]; then echo .venv/bin/ruff; else command -v ruff || echo ruff; fi)
+MYPY ?= $(shell if [ -f .venv/bin/mypy ]; then echo .venv/bin/mypy; else command -v mypy || echo mypy; fi)
+LINT_IMPORTS ?= $(shell if [ -f .venv/bin/lint-imports ]; then echo .venv/bin/lint-imports; else command -v lint-imports || echo lint-imports; fi)
 TWINE ?= $(shell if [ -f .venv/bin/twine ]; then echo .venv/bin/twine; else command -v twine || echo twine; fi)
 
 # GPG key to use for signing release artifacts.
@@ -10,7 +12,30 @@ TWINE ?= $(shell if [ -f .venv/bin/twine ]; then echo .venv/bin/twine; else comm
 #   make release GPG_KEY_ID=<fingerprint or email>
 GPG_KEY_ID ?= $(shell gpg --list-secret-keys --keyid-format LONG 2>/dev/null | awk '/^sec/{print $$2}' | head -1 | cut -d'/' -f2)
 
-.PHONY: setup backend frontend dev test integration-test clean lint format verify release publish-test publish help
+.PHONY: setup backend frontend dev test integration-test clean lint format verify release publish-test publish help ci-local docs docs-build build-web-docs docs-serve serve-docs
+
+# ============================================================
+# Documentation (MkDocs Material)
+# ============================================================
+
+## docs: Build the MkDocs web documentation
+docs: docs-build
+
+## docs-build: Build MkDocs HTML documentation site
+docs-build: build-web-docs
+
+## build-web-docs: Compile MkDocs Markdown & docstrings to HTML
+build-web-docs:
+	@echo "[NSE] Building MkDocs web documentation into ../onyks-os.github.io/NetworkSandboxEngine/…"
+	$(PYTHON) -m mkdocs build
+
+## docs-serve: Launch MkDocs live documentation preview server (http://127.0.0.1:8000)
+docs-serve: serve-docs
+
+## serve-docs: Start MkDocs dev server with hot-reload
+serve-docs:
+	@echo "[NSE] Starting MkDocs live documentation server (http://127.0.0.1:8000)…"
+	$(PYTHON) -m mkdocs serve
 
 # ============================================================
 # Setup
@@ -21,41 +46,27 @@ setup:
 	@bash scripts/dev-setup.sh
 
 # ============================================================
-# Backend daemon & core socket server
+# Backend server
 # ============================================================
 
-## run-rootd: Start the privileged nse-rootd daemon (requires sudo)
-run-rootd:
-	@echo "[NSE] Starting rootd (privileged)…"
-	sudo -E $(PYTHON) -m gui.rootd
-
-## run-web: Start the unprivileged nse-web FastAPI server (runs as normal user)
+## run-web: Start the NSE FastAPI server (requires root for netns)
 run-web:
 	@echo "[NSE] Starting web server…"
-	$(PYTHON) -m gui.server serve --dev
+	sudo -E $(PYTHON) -m gui.server serve --dev
 
-## run-web-reload: Start the unprivileged nse-web FastAPI server with auto-reload
+## run-web-reload: Start the NSE FastAPI server with auto-reload (requires root)
 run-web-reload:
 	@echo "[NSE] Starting web server with auto-reload…"
-	$(PYTHON) -m gui.server serve --dev --reload
+	sudo -E $(PYTHON) -m gui.server serve --dev --reload
 
-## backend: Start both rootd and web servers (in tmux if available)
-backend:
-	@if command -v tmux &>/dev/null; then \
-		tmux new-session -d -s nse-backend 2>/dev/null || true; \
-		tmux send-keys -t nse-backend "make run-rootd" Enter; \
-		tmux split-window -h -t nse-backend; \
-		tmux send-keys -t nse-backend "make run-web" Enter; \
-		tmux attach -t nse-backend; \
-	else \
-		echo "tmux not found. Run 'make run-rootd' and 'make run-web' in separate terminals."; \
-	fi
+## backend: Start the backend web server
+backend: run-web
 
 # ============================================================
 # Frontend
 # ============================================================
 
-## frontend: Start the Vite dev server (runs as normal user on :5173)
+## frontend: Start the Vite dev server (runs on :5173)
 frontend:
 	@echo "[NSE] Starting Vite dev server…"
 	cd gui/gui_svelte && npm run dev
@@ -64,18 +75,16 @@ frontend:
 # Combined dev
 # ============================================================
 
-## dev: Launch rootd, web server, and frontend (in tmux if available)
+## dev: Launch web server and frontend (in tmux if available)
 dev:
 	@if command -v tmux &>/dev/null; then \
 		tmux new-session -d -s nse-dev 2>/dev/null || true; \
-		tmux send-keys -t nse-dev "make run-rootd" Enter; \
-		tmux split-window -h -t nse-dev; \
 		tmux send-keys -t nse-dev "make run-web" Enter; \
-		tmux split-window -v -t nse-dev; \
+		tmux split-window -h -t nse-dev; \
 		tmux send-keys -t nse-dev "make frontend" Enter; \
 		tmux attach -t nse-dev; \
 	else \
-		echo "tmux not found. Run 'make run-rootd', 'make run-web', and 'make frontend' in separate terminals."; \
+		echo "tmux not found. Run 'make run-web' and 'make frontend' in separate terminals."; \
 		make frontend; \
 	fi
 
@@ -97,11 +106,15 @@ integration-test:
 # Code Quality & Verification
 # ============================================================
 
-## lint: Check Python code styling using ruff
+## lint: Check Python code styling (ruff), type hints (mypy), and import boundaries (import-linter)
 lint:
 	@echo "[NSE] Running static analysis checks (ruff)…"
 	$(RUFF) check nse/ gui/ tests/
 	$(RUFF) format --check nse/ gui/ tests/
+	@echo "[NSE] Running static type checks (mypy)…"
+	$(MYPY) nse/ gui/
+	@echo "[NSE] Checking import boundaries (import-linter)…"
+	$(LINT_IMPORTS)
 
 ## format: Automatically format Python codebase
 format:
@@ -111,6 +124,20 @@ format:
 
 ## verify: Run static linting analysis and unit tests
 verify: lint test
+
+## ci-local: Execute full local CI pipeline (lint, unit tests, frontend build, docs build, smoke pypi test, integration tests)
+ci-local: verify build-frontend docs-build
+	@echo "[NSE] Running PyPI smoke test…"
+	@python3 -m venv .smoke_test_venv && \
+		.smoke_test_venv/bin/pip install -e ".[cli]" >/dev/null && \
+		.smoke_test_venv/bin/python -c "import nse; from nse.core.pipeline import run_test_pipeline; print('Smoke PyPI OK')" && \
+		rm -rf .smoke_test_venv
+	@echo "[NSE] Running privileged integration tests (requires sudo)…"
+	@sudo -E $(PYTHON) -m pytest tests/ -v -m "integration"
+	@sudo -E $(PYTHON) -m nse.cli.runner --file tests/test_suite.yaml
+	@echo "========================================================================"
+	@echo "[NSE] Local CI pipeline PASSED 100%!"
+	@echo "========================================================================"
 
 # ============================================================
 # Build

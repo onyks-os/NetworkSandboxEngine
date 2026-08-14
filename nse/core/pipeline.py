@@ -10,32 +10,19 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import subprocess
-from typing import TYPE_CHECKING
+import uuid
+from typing import Any, cast
 
+from nse.core.mock_listener import start_mock_listener
+from nse.core.naming import derive_names
+from nse.core.netns_controller import NetnsController, TestRun
 from nse.core.rule_engine import RuleEngine, RuleValidationError
 from nse.core.scapy_injector import ScapyInjector
-
-try:
-    from nse.models.test_request import TopologyType
-    from nse.models.trace_event import TraceEvent
-except ImportError:
-    TraceEvent = None
-
-    class TopologyType:
-        SIMPLE = "simple"
-        GATEWAY = "gateway"
-
-
-try:
-    from gui.daemon.mock_listener import start_mock_listener
-    from gui.daemon.trace_harvester import TraceHarvester
-except ImportError:
-    TraceHarvester = None
-    start_mock_listener = None
-
-if TYPE_CHECKING:
-    from nse.core.netns_controller import NetnsController, TestRun
+from nse.core.trace_harvester import TraceHarvester
+from nse.models.test_request import TestRequest, TopologyType
+from nse.models.trace_event import TraceEvent
 
 logger = logging.getLogger("nse.core.pipeline")
 
@@ -43,12 +30,10 @@ _VETH_PEER = "veth-nse"  # lives inside the netns
 
 # How long to wait for trace events after packet injection (seconds).
 _TRACE_TIMEOUT = 5.0
-
-# How long to let `nft monitor trace` initialise before injecting the packet.
-_WARMUP_DELAY = 0.4
+_VERDICT_TIMEOUT = float(os.getenv("NSE_VERDICT_TIMEOUT", "2.0"))
 
 
-def parse_conntrack_line(line: str) -> dict | None:
+def parse_conntrack_line(line: str) -> dict[str, Any] | None:
     parts = line.strip().split()
     if len(parts) < 6:
         return None
@@ -100,7 +85,7 @@ def parse_conntrack_line(line: str) -> dict | None:
     return None
 
 
-def read_conntrack_table(netns: str, use_nsenter: bool = False) -> list[dict]:
+def read_conntrack_table(netns: str, use_nsenter: bool = False) -> list[dict[str, Any]]:
     exec_cmd = (
         ["nsenter", f"--net=/var/run/netns/{netns}", "--"]
         if use_nsenter
@@ -108,7 +93,7 @@ def read_conntrack_table(netns: str, use_nsenter: bool = False) -> list[dict]:
     )
     try:
         res = subprocess.run(
-            exec_cmd + ["cat", "/proc/net/nf_conntrack"],
+            [*exec_cmd, "cat", "/proc/net/nf_conntrack"],
             capture_output=True,
             text=True,
             check=True,
@@ -117,7 +102,7 @@ def read_conntrack_table(netns: str, use_nsenter: bool = False) -> list[dict]:
     except (subprocess.CalledProcessError, OSError):
         try:
             res = subprocess.run(
-                exec_cmd + ["cat", "/proc/net/ip_conntrack"],
+                [*exec_cmd, "cat", "/proc/net/ip_conntrack"],
                 capture_output=True,
                 text=True,
                 check=True,
@@ -136,42 +121,54 @@ def read_conntrack_table(netns: str, use_nsenter: bool = False) -> list[dict]:
     return entries
 
 
-async def run_test_pipeline(controller: NetnsController, run: TestRun) -> None:
-    """Full test lifecycle coroutine. Runs async inside the event loop."""
-    if TraceHarvester is None or start_mock_listener is None:
-        raise RuntimeError(
-            "GUI/daemon dependencies (trace_harvester, mock_listener) are missing. "
-            "Please install the GUI components or run with full dependencies."
-        )
+async def run_test_pipeline(
+    request: TestRequest,
+    controller: NetnsController | None = None,
+    queue: asyncio.Queue[TraceEvent | None] | None = None,
+    run: TestRun | None = None,
+) -> list[TraceEvent]:
+    """
+    Full test lifecycle coroutine.
 
-    if TraceEvent is None:
-        raise RuntimeError(
-            "Pydantic model dependencies are missing. Please install the required extras."
-        )
+    Executes a test request in isolated Linux network namespaces, injecting packets
+    and collecting kernel nftables trace events.
+    """
+    if controller is None:
+        controller = NetnsController()
+
+    if run is None:
+        test_id = uuid.uuid4().hex[:12]
+        netns_name = f"nse_{test_id}"
+        run = TestRun(test_id=test_id, netns_name=netns_name, request=request)
+        if queue is not None:
+            run.event_queue = queue
+
+    event_queue = run.event_queue
+    collected_events: list[TraceEvent] = []
+
+    async def emit_event(evt: TraceEvent | None) -> None:
+        if evt is not None:
+            collected_events.append(evt)
+        await event_queue.put(evt)
 
     run.status = "running"
-    netns = run.netns_name
-    queue = run.event_queue
-    req = run.request
+    req = request
+    names = derive_names(run.test_id)
+    netns = names.netns
+    router_ns = names.router_ns
+    server_ns = names.server_ns
+    veth_host = names.veth_host
+    veth_router_host = names.veth_router_host
+    veth_router_server = names.veth_router_server
+    veth_server = names.veth_server
 
     is_gateway = req.topology == TopologyType.GATEWAY
-    router_ns = f"nsr_{run.test_id}"
-    server_ns = f"nss_{run.test_id}"
-
     listeners = []
     harvester = TraceHarvester()
     engine = RuleEngine(use_nsenter=controller.use_nsenter)
     injector = ScapyInjector(use_nsenter=controller.use_nsenter)
 
     loop = asyncio.get_running_loop()
-
-    # Derived interface names for Gateway topology
-    suffix = run.test_id[:8]
-    veth_host = f"vhr-{suffix}"
-    veth_router_host = f"vrh-{suffix}"
-    veth_router_server = f"vrs-{suffix}"
-    veth_server = f"vsr-{suffix}"
-
     target_netns = router_ns if is_gateway else netns
 
     try:
@@ -226,21 +223,26 @@ async def run_test_pipeline(controller: NetnsController, run: TestRun) -> None:
         await loop.run_in_executor(None, engine.load, req.rules, target_netns)
 
         # ------------------------------------------------------------------
-        # 4. Start nft monitor trace
+        # 4. Start nft monitor trace & wait for readiness probe
         # ------------------------------------------------------------------
         logger.info("[%s] Starting nft monitor trace", run.test_id)
+
+        def on_trace_event(evt: TraceEvent) -> None:
+            collected_events.append(evt)
+
         await harvester.start(
             netns_name=target_netns,
-            queue=queue,
+            queue=event_queue,
             timeout=_TRACE_TIMEOUT,
             use_nsenter=controller.use_nsenter,
+            on_event=on_trace_event,
         )
 
-        # Give `nft monitor trace` time to initialize
-        await asyncio.sleep(_WARMUP_DELAY)
+        # Readiness probe replacement for hardcoded delay
+        await harvester.wait_ready(timeout=2.0)
 
         # ------------------------------------------------------------------
-        # 5. Inject Packet Sequence
+        # 5. Inject Packet Sequence (Per-packet ordering-based injection)
         # ------------------------------------------------------------------
         for idx, pkt in enumerate(req.packets, start=1):
             logger.info(
@@ -261,18 +263,19 @@ async def run_test_pipeline(controller: NetnsController, run: TestRun) -> None:
                 veth_host,
                 veth_peer_target,
             )
+            # Short per-packet delay to let kernel trace process the verdict deterministically
+            await asyncio.sleep(0.15)
 
         # ------------------------------------------------------------------
-        # 6. Wait for trace events to populate, then stop monitor
+        # 6. Collect conntrack entries & finish
         # ------------------------------------------------------------------
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.3)
 
-        # Collect conntrack entries right before finishing
         ct_entries = await loop.run_in_executor(
             None, read_conntrack_table, target_netns, controller.use_nsenter
         )
         for ct in ct_entries:
-            await queue.put(
+            await emit_event(
                 TraceEvent(
                     type="conntrack",
                     trace_id=run.test_id,
@@ -287,7 +290,7 @@ async def run_test_pipeline(controller: NetnsController, run: TestRun) -> None:
     except RuleValidationError as exc:
         logger.warning("[%s] Rule validation error: %s", run.test_id, exc)
         run.status = "error"
-        await queue.put(
+        await emit_event(
             TraceEvent(
                 type="error",
                 trace_id=run.test_id,
@@ -295,13 +298,13 @@ async def run_test_pipeline(controller: NetnsController, run: TestRun) -> None:
                 raw_message=str(exc.errors),
             )
         )
-        await queue.put(None)
+        await emit_event(None)
         harvester.stop()
 
     except Exception as exc:
         logger.exception("[%s] Pipeline error", run.test_id)
         run.status = "error"
-        await queue.put(
+        await emit_event(
             TraceEvent(
                 type="error",
                 trace_id=run.test_id,
@@ -309,7 +312,7 @@ async def run_test_pipeline(controller: NetnsController, run: TestRun) -> None:
                 raw_message=str(exc),
             )
         )
-        await queue.put(None)
+        await emit_event(None)
         harvester.stop()
 
     finally:
@@ -318,12 +321,13 @@ async def run_test_pipeline(controller: NetnsController, run: TestRun) -> None:
         # ------------------------------------------------------------------
         logger.info("[%s] Tearing down mock listeners", run.test_id)
         for listener in listeners:
+            listener_proc: subprocess.Popen[str] = cast(subprocess.Popen[str], listener["proc"])
             try:
-                listener["proc"].terminate()
-                listener["proc"].wait(timeout=0.5)
+                listener_proc.terminate()
+                listener_proc.wait(timeout=0.5)
             except (OSError, subprocess.SubprocessError):
                 with contextlib.suppress(OSError, subprocess.SubprocessError):
-                    listener["proc"].kill()
+                    listener_proc.kill()
 
         # ------------------------------------------------------------------
         # Teardown namespaces & host interfaces (blocking → executor)
@@ -345,3 +349,5 @@ async def run_test_pipeline(controller: NetnsController, run: TestRun) -> None:
                 check=False,
             ),
         )
+
+    return collected_events

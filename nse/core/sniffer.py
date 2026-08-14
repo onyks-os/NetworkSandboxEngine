@@ -53,6 +53,5 @@ class PCAPAsserter:
         """Stop the async sniffer and return captured packets."""
         logger.info("Stopping PCAP sniffer on %s", self.iface)
         loop = asyncio.get_running_loop()
-        # Sniffer.stop() blocks until the sniffing thread joins, execute in executor
         packets = await loop.run_in_executor(None, self._sniffer.stop)
-        return list(packets)
+        return list(packets) if packets is not None else []

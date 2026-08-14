@@ -10,9 +10,8 @@ permissions:
   contents: read
 
 jobs:
-  test-and-build:
+  lint:
     runs-on: ubuntu-latest
-
     steps:
     - name: Checkout Repository
       uses: actions/checkout@v4
@@ -23,6 +22,36 @@ jobs:
         python-version: '3.11'
         cache: 'pip'
 
+    - name: Bootstrap Environment
+      run: make setup
+
+    - name: Run Static Lints & Type Checks (Ruff, Mypy, Import-Linter)
+      run: make lint
+
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+
+    - name: Bootstrap Environment
+      run: make setup
+
+    - name: Run Python Unit Tests
+      run: make test
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
     - name: Set up Node.js
       uses: actions/setup-node@v4
       with:
@@ -30,27 +59,51 @@ jobs:
         cache: 'npm'
         cache-dependency-path: 'gui/gui_svelte/package-lock.json'
 
+    - name: Bootstrap Environment
+      run: make setup
+
+    - name: Build Svelte Frontend
+      run: make build-frontend
+
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+
     - name: Install System Dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y nftables iproute2 conntrack
 
     - name: Bootstrap Environment
-      run: |
-        make setup
+      run: make setup
 
-    - name: Run Static Analysis Lints (Ruff)
+    - name: Run Privileged Oracle Integration Tests
       run: |
-        make lint
-
-    - name: Run Python Unit Tests
-      run: |
-        make test
-
-    - name: Run Svelte Frontend Build
-      run: |
-        make build-frontend
-
-    - name: Run Headless CLI Integration Tests (netns + nftables)
-      run: |
+        sudo .venv/bin/python -m pytest tests/ -v -m "integration"
         sudo .venv/bin/python -m nse.cli.runner --file tests/test_suite.yaml
+
+  smoke-pypi:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Test Editable Install & Imports
+      run: |
+        python -m venv .smoke_venv
+        source .smoke_venv/bin/activate
+        pip install -e ".[cli]"
+        python -c "import nse; from nse.core.pipeline import run_test_pipeline; print('Smoke PyPI OK')"

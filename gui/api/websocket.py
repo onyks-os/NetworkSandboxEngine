@@ -8,18 +8,17 @@ WS /ws/{test_id}
 
 The client opens this connection immediately after receiving a test_id from
 POST /api/test.  The server streams TraceEvent JSON objects as the kernel
-emits them via `nft monitor trace` and proxies them through nse-rootd.
+emits them via `nft monitor trace`.
 """
 
 from __future__ import annotations
 
+import contextlib
 import logging
-from typing import Annotated
 
-from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from gui.api.deps import get_client
-from gui.api.rootd_client import RootdClient
+from nse.core.netns_controller import TestRun
 
 logger = logging.getLogger("nse.api.websocket")
 
@@ -30,13 +29,19 @@ router = APIRouter(tags=["websocket"])
 async def trace_stream(
     websocket: WebSocket,
     test_id: str,
-    client: Annotated[RootdClient, Depends(get_client)],
 ) -> None:
     """Stream trace events for a running test over WebSocket."""
     await websocket.accept()
 
+    run: TestRun | None = websocket.app.state.runs.get(test_id)
+    if run is None:
+        await websocket.send_json({"type": "error", "message": f"Test '{test_id}' not found"})
+        await websocket.close()
+        return
+
     try:
-        async for event in client.stream_events(test_id):
+        while True:
+            event = await run.event_queue.get()
             if event is None:
                 # Sentinel: test pipeline has finished
                 await websocket.send_json({"type": "done"})
@@ -53,7 +58,5 @@ async def trace_stream(
         logger.exception("Error in WebSocket stream for test %s", test_id)
         await websocket.send_json({"type": "error", "message": str(exc)})
     finally:
-        try:
+        with contextlib.suppress(RuntimeError):
             await websocket.close()
-        except RuntimeError:
-            pass  # Already closed by the client, this is fine

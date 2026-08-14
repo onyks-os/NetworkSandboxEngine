@@ -1,0 +1,44 @@
+[
+  {
+    "type": "hook",
+    "trace_id": "1be8aad4",
+    "family": "ip",
+    "table": "filter",
+    "chain": "input",
+    "hook": "veth0"
+  },
+  {
+    "type": "match",
+    "trace_id": "1be8aad4",
+    "family": "ip",
+    "table": "filter",
+    "chain": "input",
+    "rule_handle": 3,
+    "rule_text": "tcp dport 80 accept",
+    "verdict": "accept"
+  },
+  {
+    "type": "verdict",
+    "trace_id": "1be8aad4",
+    "family": "ip",
+    "table": "filter",
+    "chain": "input",
+    "verdict": "ACCEPT"
+  },
+  {
+    "type": "hook",
+    "trace_id": "2fe9bce5",
+    "family": "ip",
+    "table": "filter",
+    "chain": "input",
+    "hook": "veth0"
+  },
+  {
+    "type": "verdict",
+    "trace_id": "2fe9bce5",
+    "family": "ip",
+    "table": "filter",
+    "chain": "input",
+    "verdict": "DROP"
+  }
+]

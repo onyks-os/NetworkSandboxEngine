@@ -13,6 +13,7 @@ import re
 import subprocess
 import tempfile
 from dataclasses import dataclass
+from typing import Any
 
 logger = logging.getLogger("nse.core.rule_engine")
 
@@ -41,7 +42,7 @@ class NftError:
 class RuleValidationError(Exception):
     """Raised when `nft -f` rejects the supplied ruleset."""
 
-    def __init__(self, errors: list[dict]) -> None:
+    def __init__(self, errors: list[dict[str, Any]]) -> None:
         self.errors = errors
         super().__init__(f"nftables validation failed: {errors}")
 
@@ -70,6 +71,7 @@ class RuleEngine:
                 capture_output=True,
                 text=True,
                 check=False,
+                timeout=10.0,
             )
             if result.returncode != 0:
                 errors = _parse_nft_errors(result.stderr, path)
@@ -88,12 +90,13 @@ class RuleEngine:
         full_ruleset = f"{_TRACE_INIT_RULESET}\n{rules}"
 
         with _temp_rules_file(full_ruleset) as path:
-            cmd = self.exec_prefix(netns_name) + ["nft", "-f", path]
+            cmd = [*self.exec_prefix(netns_name), "nft", "-f", path]
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
                 check=False,
+                timeout=30.0,
             )
             if result.returncode != 0:
                 errors = _parse_nft_errors(result.stderr, path)
@@ -101,11 +104,12 @@ class RuleEngine:
 
     def flush(self, netns_name: str) -> None:
         """Remove all nftables rules from a namespace (safe cleanup)."""
-        cmd = self.exec_prefix(netns_name) + ["nft", "flush", "ruleset"]
+        cmd = [*self.exec_prefix(netns_name), "nft", "flush", "ruleset"]
         subprocess.run(
             cmd,
             capture_output=True,
             check=False,
+            timeout=10.0,
         )
 
 
@@ -123,16 +127,16 @@ class _temp_rules_file:
             f.write(self._rules)
         return path
 
-    def __exit__(self, *_) -> None:
+    def __exit__(self, *_: Any) -> None:
         if self._path and os.path.exists(self._path):
             os.unlink(self._path)
 
 
-def _parse_nft_errors(stderr: str, rules_path: str) -> list[dict]:
+def _parse_nft_errors(stderr: str, rules_path: str) -> list[dict[str, Any]]:
     """
     Parse nft stderr into a list of structured error dicts.
     """
-    errors: list[dict] = []
+    errors: list[dict[str, Any]] = []
     for raw_line in stderr.splitlines():
         raw_line = raw_line.strip()
         if not raw_line:

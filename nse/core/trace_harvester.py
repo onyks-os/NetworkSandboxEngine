@@ -21,9 +21,11 @@ times out) to signal the WebSocket to send a "done" event and close.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import re
 import time
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -62,7 +64,16 @@ class TraceHarvester:
 
     def __init__(self) -> None:
         self._proc: asyncio.subprocess.Process | None = None
-        self._task: asyncio.Task | None = None
+        self._task: asyncio.Task[None] | None = None
+        self._ready_event = asyncio.Event()
+
+    async def wait_ready(self, timeout: float = 2.0) -> bool:
+        """Wait until the trace harvester process is up and reading."""
+        try:
+            await asyncio.wait_for(self._ready_event.wait(), timeout=timeout)
+            return True
+        except asyncio.TimeoutError:
+            return False
 
     async def start(
         self,
@@ -70,6 +81,7 @@ class TraceHarvester:
         queue: asyncio.Queue[TraceEvent | None],
         timeout: float = 10.0,
         use_nsenter: bool = False,
+        on_event: Callable[[TraceEvent], None] | None = None,
     ) -> None:
         """
         Launch `nft monitor trace` inside *netns_name* and begin streaming.
@@ -79,7 +91,9 @@ class TraceHarvester:
             queue:      Output queue (TraceEvent or None sentinel on completion).
             timeout:    Max seconds to wait for trace events before giving up.
             use_nsenter: Use nsenter fallback in container environments.
+            on_event:   Optional callback invoked synchronously on every parsed TraceEvent.
         """
+        self._ready_event.clear()
         if use_nsenter:
             cmd = ["nsenter", f"--net=/var/run/netns/{netns_name}", "--", "nft", "monitor", "trace"]
         else:
@@ -91,12 +105,15 @@ class TraceHarvester:
             stdout=asyncio.subprocess.PIPE,
             stderr=None,
         )
-        self._task = asyncio.ensure_future(self._read_loop(queue=queue, timeout=timeout))
+        self._task = asyncio.ensure_future(
+            self._read_loop(queue=queue, timeout=timeout, on_event=on_event)
+        )
 
     async def _read_loop(
         self,
         queue: asyncio.Queue[TraceEvent | None],
         timeout: float,
+        on_event: Callable[[TraceEvent], None] | None = None,
     ) -> None:
         """Read stdout line by line, parse, and push to queue."""
 
@@ -104,6 +121,7 @@ class TraceHarvester:
         assert self._proc.stdout is not None
 
         deadline = asyncio.get_event_loop().time() + timeout
+        self._ready_event.set()
 
         try:
             while True:
@@ -130,6 +148,8 @@ class TraceHarvester:
                 if event is not None:
                     logger.debug("TraceEvent: %s", event)
                     await queue.put(event)
+                    if on_event is not None:
+                        on_event(event)
 
         except Exception:
             logger.exception("Error in trace read loop")
@@ -140,10 +160,8 @@ class TraceHarvester:
     def stop(self) -> None:
         """Terminate the monitor process."""
         if self._proc and self._proc.returncode is None:
-            try:
+            with contextlib.suppress(ProcessLookupError):
                 self._proc.terminate()
-            except ProcessLookupError:
-                pass
         if self._task and not self._task.done():
             try:
                 current = asyncio.current_task()

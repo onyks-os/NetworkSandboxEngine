@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "network-sandbox-engine"
-version = "1.1.1"
+version = "2.0.0"
 description = "Headless Python engine for isolated network namespace testing and PCAP assertions."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -14,7 +14,7 @@ authors = [
 ]
 keywords = ["networking", "namespace", "testing", "nftables", "pcap", "scapy"]
 classifiers = [
-    "Development Status :: 5 - Production/Stable",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX :: Linux",
@@ -27,23 +27,27 @@ classifiers = [
 ]
 dependencies = [
     "scapy>=2.5.0",
+    "pydantic>=2.0.0",
 ]
 
 [project.optional-dependencies]
 cli = [
-    "pydantic>=2.0.0",
     "pyyaml>=6.0",
 ]
 gui = [
     "fastapi>=0.111.0",
     "uvicorn[standard]>=0.29.0",
     "websockets>=12.0",
-    "pydantic>=2.0.0",
 ]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "ruff",
+    "import-linter",
+    "mypy",
+    "mkdocs>=1.5.0",
+    "mkdocs-material>=9.5.0",
+    "mkdocstrings[python]>=0.24.0",
 ]
 
 [project.scripts]
@@ -60,7 +64,26 @@ include = ["nse", "nse.*"]   # Packages ONLY the core! gui/ and tests/ are exclu
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "strict"
+markers = [
+    "integration: integration tests requiring root and real network namespaces",
+]
+filterwarnings = [
+    "ignore:.*Diffie-Hellman over finite fields.*:Warning",
+    "ignore:.*Diffie-Hellman over finite fields.*:DeprecationWarning",
+    "ignore::UserWarning:scapy.*",
+]
 
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "C4", "RUF", "PT"]
+ignore = ["E501", "PT011"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_return_any = true
+disallow_untyped_defs = true
+ignore_missing_imports = true

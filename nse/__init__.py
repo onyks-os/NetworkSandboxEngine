@@ -4,4 +4,6 @@
 from .core.netns_controller import NetnsController
 from .core.sniffer import PCAPAsserter
 
-__all__ = ["NetnsController", "PCAPAsserter"]
+__version__ = "2.0.0"
+
+__all__ = ["NetnsController", "PCAPAsserter", "__version__"]

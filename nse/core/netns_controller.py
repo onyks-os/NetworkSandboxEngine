@@ -13,15 +13,17 @@ import asyncio
 import contextlib
 import logging
 import subprocess
+import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
+from nse.core.naming import NETNS_SWEEP_PREFIXES, VETH_SWEEP_PREFIXES
 from nse.core.utils import is_in_container
 
 if TYPE_CHECKING:
     from nse.models.test_request import TestRequest
-    from nse.models.trace_event import TestStatusResponse, TraceEvent
+    from nse.models.trace_event import TraceEvent
 
 logger = logging.getLogger("nse.core.netns")
 
@@ -34,7 +36,9 @@ class TestRun:
     netns_name: str
     request: TestRequest
     status: str = "pending"  # pending | running | done | error
-    event_queue: asyncio.Queue = field(default_factory=lambda: asyncio.Queue(maxsize=512))
+    event_queue: asyncio.Queue[TraceEvent | None] = field(
+        default_factory=lambda: asyncio.Queue(maxsize=512)
+    )
 
 
 class NamespaceSandbox:
@@ -61,16 +65,17 @@ class NamespaceSandbox:
             stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await proc.communicate()
-        if proc.returncode != 0:
+        returncode = proc.returncode if proc.returncode is not None else 1
+        if returncode != 0:
             raise subprocess.CalledProcessError(
-                proc.returncode,
+                returncode,
                 cmd,
                 output=stdout,
                 stderr=stderr,
             )
         return subprocess.CompletedProcess(
             args=cmd,
-            returncode=proc.returncode,
+            returncode=returncode,
             stdout=stdout,
             stderr=stderr,
         )
@@ -86,11 +91,11 @@ class NamespaceSandbox:
         Inject a layer 3/4 packet on the host side of the veth link targeting this namespace.
         """
         from nse.core.scapy_injector import ScapyInjector
-        from nse.models.base import PacketSpec
+        from nse.models.test_request import PacketSpec
 
         injector = ScapyInjector()
         packet = PacketSpec(
-            protocol=protocol,
+            protocol=cast(Any, protocol),
             dst_port=dst_port,
             dst_ip=dst_ip,
             src_ip=src_ip or ("10.0.1.1" if "." in dst_ip else "fd00:1::1"),
@@ -115,11 +120,51 @@ class NetnsController:
 
     def __init__(self, use_nsenter: bool | None = None) -> None:
         self._active_ns: set[str] = set()  # namespace names
-        self._tests: dict[str, TestRun] = {}  # test_id → TestRun
         if use_nsenter is None:
             self.use_nsenter = is_in_container()
         else:
             self.use_nsenter = use_nsenter
+        self.startup_sweep()
+
+    def startup_sweep(self) -> None:
+        """Clean up orphan namespaces and veth pairs left behind by previous crashes."""
+        try:
+            res = subprocess.run(
+                ["ip", "netns", "list"], capture_output=True, text=True, check=False, timeout=5.0
+            )
+            if res.returncode == 0:
+                for line in res.stdout.splitlines():
+                    ns_name = line.split()[0] if line.split() else ""
+                    if ns_name.startswith(NETNS_SWEEP_PREFIXES):
+                        logger.info("Startup sweep: removing orphan netns %s", ns_name)
+                        subprocess.run(
+                            ["ip", "netns", "del", ns_name],
+                            capture_output=True,
+                            check=False,
+                            timeout=5.0,
+                        )
+        except Exception as exc:
+            logger.debug("Startup sweep netns list failed: %s", exc)
+
+        try:
+            res = subprocess.run(
+                ["ip", "link", "show"], capture_output=True, text=True, check=False, timeout=5.0
+            )
+            if res.returncode == 0:
+                for line in res.stdout.splitlines():
+                    parts = line.split(":")
+                    if len(parts) >= 2:
+                        iface = parts[1].strip().split("@")[0]
+                        if iface.startswith(VETH_SWEEP_PREFIXES):
+                            logger.info("Startup sweep: removing orphan veth link %s", iface)
+                            subprocess.run(
+                                ["ip", "link", "del", iface],
+                                capture_output=True,
+                                check=False,
+                                timeout=5.0,
+                            )
+        except Exception as exc:
+            logger.debug("Startup sweep veth list failed: %s", exc)
 
     def exec_prefix(self, name: str) -> list[str]:
         if self.use_nsenter:
@@ -127,7 +172,7 @@ class NetnsController:
         else:
             return ["ip", "netns", "exec", name]
 
-    def _run_in_netns(self, name: str, cmd: list[str]) -> subprocess.CompletedProcess:
+    def _run_in_netns(self, name: str, cmd: list[str]) -> subprocess.CompletedProcess[str]:
         return _run(self.exec_prefix(name) + cmd)
 
     # ------------------------------------------------------------------
@@ -161,12 +206,25 @@ class NetnsController:
             logger.warning("Could not set accept_dad sysctls inside netns %s: %s", name, e)
 
     def destroy_netns(self, name: str) -> None:
-        """Delete a network namespace. Idempotent (ignores 'not found' errors)."""
+        """Delete a network namespace with retry backoff. Idempotent."""
         logger.debug("Destroying netns: %s", name)
-        try:
-            _run(["ip", "netns", "del", name])
-        except subprocess.CalledProcessError:
-            logger.warning("netns %s may already be gone, ignoring.", name)
+        delays = [0.1, 0.5, 1.0]
+        for idx, delay in enumerate(delays):
+            try:
+                _run(["ip", "netns", "del", name])
+                break
+            except subprocess.CalledProcessError as err:
+                stderr = err.stderr or ""
+                if "No such file or directory" in stderr or "Invalid argument" in stderr:
+                    logger.debug("netns %s already gone.", name)
+                    break
+                if idx < len(delays) - 1:
+                    time.sleep(delay)
+                else:
+                    logger.warning("Failed to destroy netns %s after 3 attempts: %s", name, err)
+            except subprocess.TimeoutExpired:
+                logger.warning("Timeout destroying netns %s", name)
+                break
         self._active_ns.discard(name)
 
     @contextlib.asynccontextmanager
@@ -529,55 +587,19 @@ class NetnsController:
         for name in list(self._active_ns):
             self.destroy_netns(name)
 
-    # ------------------------------------------------------------------
-    # Test run management
-    # ------------------------------------------------------------------
-
-    def enqueue_test(self, test_id: str, request: TestRequest) -> None:
-        """Register a new test and schedule its pipeline for execution."""
-        from nse.core.pipeline import run_test_pipeline  # local import avoids cycles
-
-        netns_name = f"nse_{test_id}"
-        run = TestRun(test_id=test_id, netns_name=netns_name, request=request)
-        self._tests[test_id] = run
-
-        # Schedule the async pipeline without blocking the request handler
-        asyncio.ensure_future(run_test_pipeline(controller=self, run=run))
-
-    def has_test(self, test_id: str) -> bool:
-        return test_id in self._tests
-
-    def get_status(self, test_id: str) -> TestStatusResponse | None:
-        try:
-            from nse.models.trace_event import TestStatusResponse
-        except ImportError as exc:
-            raise ImportError(
-                "Pydantic is required to use get_status(). Install it with: pip install 'network-sandbox-engine[cli]'"
-            ) from exc
-
-        run = self._tests.get(test_id)
-        if run is None:
-            return None
-        return TestStatusResponse(test_id=test_id, status=run.status)
-
-    def get_event_queue(self, test_id: str) -> asyncio.Queue[TraceEvent | None]:
-        return self._tests[test_id].event_queue
-
-    def release_test(self, test_id: str) -> None:
-        """Called by the WebSocket handler after the connection closes."""
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def _run(cmd: list[str]) -> subprocess.CompletedProcess:
-    """Run a subprocess command, raising on non-zero exit."""
+def _run(cmd: list[str], timeout: float = 10.0) -> subprocess.CompletedProcess[str]:
+    """Run a subprocess command, raising on non-zero exit or timeout."""
     result = subprocess.run(
         cmd,
         capture_output=True,
         text=True,
         check=True,
+        timeout=timeout,
     )
     return result

@@ -1,0 +1,9 @@
+[importlinter]
+root_package = nse
+include_external_packages = True
+
+[importlinter:contract:nse-headless]
+name = Headless Core import boundary
+type = forbidden
+source_modules = nse
+forbidden_modules = gui

@@ -4,31 +4,22 @@
 import argparse
 import asyncio
 import sys
-import time
 
 try:
     import yaml
-    from pydantic import ValidationError
-
-    from nse.core.netns_controller import NetnsController, TestRun
-    from nse.core.pipeline import run_test_pipeline
-    from nse.models.test_request import PacketSpec, TestRequest, TopologyType
-    from nse.models.trace_event import TraceEvent
 except ImportError:
     yaml = None
-    ValidationError = None
-    TestRequest = None
-    PacketSpec = None
-    TopologyType = None
-    TraceEvent = None
-    NetnsController = None
-    TestRun = None
-    run_test_pipeline = None
+
+from pydantic import ValidationError
+
+from nse.core.netns_controller import NetnsController
+from nse.core.pipeline import run_test_pipeline
+from nse.models.test_request import PacketSpec, TestRequest, TopologyType
 
 
 def check_cli_dependencies() -> None:
     """Verify that CLI extras are installed."""
-    if yaml is None or ValidationError is None or TestRequest is None:
+    if yaml is None:
         print("[FATAL ERROR] Missing dependencies for CLI runner.", file=sys.stderr)
         print("To use the YAML test runner, install the CLI extras:", file=sys.stderr)
         print("    pip install 'network-sandbox-engine[cli]'", file=sys.stderr)
@@ -57,7 +48,7 @@ def main() -> None:
 
     print(f"[NSE] Loading test suite from: {args.file}")
     try:
-        with open(args.file, "r") as f:
+        with open(args.file) as f:
             if args.file.endswith(".json"):
                 import json
 
@@ -125,31 +116,24 @@ def main() -> None:
             failed += 1
             continue
 
-        test_id = f"cli_{tc_idx}_{int(time.time())}"
-        run = TestRun(test_id=test_id, netns_name=f"nse_{test_id}", request=request)
-
         try:
-            loop.run_until_complete(run_test_pipeline(controller, run))
+            events = loop.run_until_complete(
+                run_test_pipeline(request=request, controller=controller)
+            )
         except (RuntimeError, OSError, ValueError) as e:
             print(f"  [FAIL] Pipeline crashed with error: {e}")
             failed += 1
             continue
 
-        events = []
-        while not run.event_queue.empty():
-            evt = loop.run_until_complete(run.event_queue.get())
-            if evt is None:
-                continue
-            events.append(evt)
-
-        trace_id_to_verdicts = {}
-        trace_id_to_user_table = {}
-        all_seen_trace_ids = []
-        errors = []
+        trace_id_to_verdicts: dict[str, list[str]] = {}
+        trace_id_to_user_table: dict[str, bool] = {}
+        all_seen_trace_ids: list[str] = []
+        errors: list[str] = []
 
         for evt in events:
             if evt.type == "error":
-                errors.append(evt.raw_message)
+                if evt.raw_message:
+                    errors.append(evt.raw_message)
             elif evt.trace_id:
                 if evt.trace_id not in trace_id_to_verdicts:
                     trace_id_to_verdicts[evt.trace_id] = []
@@ -176,14 +160,15 @@ def main() -> None:
                 actual_verdicts.append("DROP")
             elif any(v == "ACCEPT" for v in v_list):
                 actual_verdicts.append("ACCEPT")
-            else:
-                actual_verdicts.append("DROP")
 
-        while len(actual_verdicts) < len(expected_verdicts):
-            actual_verdicts.append("DROP")
+        if len(actual_verdicts) != len(expected_verdicts):
+            print(
+                f"  [FAIL] Oracle Error: Expected {len(expected_verdicts)} verdicts, "
+                f"but observed {len(actual_verdicts)}."
+            )
 
         test_passed = True
-        for idx, (exp, act) in enumerate(zip(expected_verdicts, actual_verdicts)):
+        for idx, (exp, act) in enumerate(zip(expected_verdicts, actual_verdicts, strict=False)):
             if exp != act:
                 print(f"  [FAIL] Packet {idx + 1}: expected {exp}, got {act}")
                 test_passed = False

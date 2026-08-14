@@ -13,7 +13,7 @@ import sys
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from nse.models.base import PacketSpec
+    from nse.models.test_request import PacketSpec
 
 logger = logging.getLogger("nse.core.scapy_injector")
 
@@ -73,7 +73,7 @@ class ScapyInjector:
                     "Performing in-process L2 injection on host interface %s",
                     inject_interface,
                 )
-                from scapy.all import (
+                from scapy.all import (  # type: ignore[attr-defined]
                     ICMP,
                     IP,
                     TCP,
@@ -151,6 +151,7 @@ class ScapyInjector:
                 capture_output=True,
                 text=True,
                 check=False,
+                timeout=10.0,
             )
 
             if result.returncode != 0:
@@ -179,7 +180,7 @@ def _get_mac_address(
             cmd += ["ip", "netns", "exec", netns_name]
     cmd += ["ip", "-o", "link", "show", "dev", interface]
 
-    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=10.0)
     m = re.search(r"link/ether\s+([0-9a-fA-F:]{17})", result.stdout)
     if not m:
         raise RuntimeError(

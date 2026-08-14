@@ -83,7 +83,7 @@ def start_mock_listener(
     port: int,
     host: str = "::",
     use_nsenter: bool = False,
-) -> subprocess.Popen:
+) -> subprocess.Popen[str]:
     """Spawns a mock listener inside the namespace in a background process."""
     cmd = []
     if use_nsenter:
@@ -94,7 +94,7 @@ def start_mock_listener(
         sys.executable,
         "-u",
         "-m",
-        "gui.daemon.mock_listener",
+        "nse.core.mock_listener",
         "--proto",
         proto.lower(),
         "--port",

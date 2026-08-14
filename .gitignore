@@ -241,3 +241,5 @@ gui/gui_svelte/.svelte-kit/
 **/SHA256SUMS*
 **/*.whl
 **/*.tar.gz
+
+network_sandbox_engine.egg-info

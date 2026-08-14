@@ -9,24 +9,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-try:
-    from pydantic import BaseModel, Field
-
-    HAS_PYDANTIC = True
-except ImportError:
-
-    class BaseModel:
-        def __init__(self, **kwargs) -> None:
-            for k, v in kwargs.items():
-                setattr(self, k, v)
-
-    def Field(*args, **kwargs):
-        class FieldInfo:
-            pass
-
-        return FieldInfo()
-
-    HAS_PYDANTIC = False
+from pydantic import BaseModel, Field
 
 
 class TraceEvent(BaseModel):

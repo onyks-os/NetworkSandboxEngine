@@ -13,15 +13,15 @@ GET  /api/test/{test_id}       : query test status
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
-from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 
-from gui.api.deps import get_client
-from gui.api.rootd_client import RootdClient
-from nse.core.rule_engine import RuleValidationError
+from nse.core.netns_controller import NetnsController, TestRun
+from nse.core.pipeline import run_test_pipeline
+from nse.core.rule_engine import RuleEngine, RuleValidationError
 from nse.models.test_request import TestRequest
 from nse.models.trace_event import TestStatusResponse
 
@@ -39,29 +39,36 @@ async def health() -> dict[str, str]:
 @router.post("/test", status_code=status.HTTP_202_ACCEPTED)
 async def submit_test(
     request: TestRequest,
-    client: Annotated[RootdClient, Depends(get_client)],
+    req: Request,
 ) -> dict[str, str]:
     """
     Accept a test request.
 
-    1. Validate the nftables ruleset (nft -f dry-run) via rootd.
-    2. Enqueue the packet injection job via rootd.
+    1. Validate the nftables ruleset (nft -f dry-run).
+    2. Enqueue the packet injection job in-process.
 
     Returns a ``test_id`` that the client uses to open a WebSocket.
     """
     test_id = uuid.uuid4().hex[:12]
+    controller: NetnsController = req.app.state.controller
 
     # --- Rule validation (fast path: raises HTTP 400 on syntax error) ---
+    engine = RuleEngine(use_nsenter=controller.use_nsenter)
     try:
-        await client.validate_rules(request.rules)
+        engine.validate(request.rules)
     except RuleValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"message": "nftables syntax error", "errors": exc.errors},
         ) from exc
 
-    # --- Register & enqueue the test run via rootd ---
-    await client.submit_test(test_id=test_id, request=request)
+    # --- Register & enqueue test run in-process ---
+    netns_name = f"nse_{test_id}"
+    run = TestRun(test_id=test_id, netns_name=netns_name, request=request)
+    req.app.state.runs[test_id] = run
+
+    task = asyncio.create_task(run_test_pipeline(request=request, controller=controller, run=run))
+    req.app.state.tasks[test_id] = task
 
     logger.info("Accepted test %s", test_id)
     return {"test_id": test_id}
@@ -70,13 +77,13 @@ async def submit_test(
 @router.get("/test/{test_id}", response_model=TestStatusResponse)
 async def get_test_status(
     test_id: str,
-    client: Annotated[RootdClient, Depends(get_client)],
+    req: Request,
 ) -> TestStatusResponse:
     """Return the current status of a test run."""
-    status_info = await client.get_status(test_id)
-    if status_info is None:
+    run: TestRun | None = req.app.state.runs.get(test_id)
+    if run is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Test '{test_id}' not found.",
         )
-    return status_info
+    return TestStatusResponse(test_id=test_id, status=run.status)  # type: ignore[arg-type]

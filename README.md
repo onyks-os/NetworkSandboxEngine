@@ -118,8 +118,7 @@ nse-runner --file my_tests.yaml
 git clone https://github.com/onyks-os/NetworkSandboxEngine.git
 cd NetworkSandboxEngine
 make setup      # bootstrap venv + npm install
-make run-rootd  # starts root socket daemon (requires sudo -E)
-make run-web    # starts FastAPI web server (runs as normal user)
+make run-web    # starts FastAPI web server (requires root for netns)
 make frontend   # starts Vite dev server on port 5173
 ```
 
@@ -152,7 +151,7 @@ NetworkSandboxEngine/
 |       `-- gui_svelte/         # Svelte + Vite frontend
 |
 |-- tests/
-|   `-- test_netns.py           # 20 unit tests (2 skipped without root)
+|   `-- test_netns.py           # 20 unit tests (2 root integration tests)
 |
 |-- pyproject.toml              # Build config - packages only nse/
 |-- Makefile                    # make setup | test | lint | release
