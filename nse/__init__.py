@@ -3,7 +3,8 @@
 
 """Network Sandbox Engine: deterministic nftables testing in ephemeral netns."""
 
-from importlib.metadata import PackageNotFoundError, version as _version
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _version
 
 from .core.netns_controller import NetnsController
 from .core.sniffer import PCAPAsserter
