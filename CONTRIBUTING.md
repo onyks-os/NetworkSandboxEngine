@@ -203,6 +203,15 @@ By making a contribution to this project, I certify that:
 
 </details>
 
+## Releasing
+
+A release is one tag: `git push origin vX.Y.Z` runs build, signing, GitHub
+Release, TestPyPI, an installed smoke test, and PyPI, in that order. Rehearse it
+with `make release-dry` first.
+
+Full procedure, including the one-time Trusted Publishing setup:
+[docs/RELEASING.md](docs/RELEASING.md).
+
 ## Pull Request Process
 
 1. Create a branch from `main`.

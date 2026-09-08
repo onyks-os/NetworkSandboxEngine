@@ -295,6 +295,14 @@ NetworkSandboxEngine/
 
 ---
 
+## Releasing
+
+One tag. `git push origin vX.Y.Z` builds, signs with Sigstore, publishes the
+GitHub Release, uploads to TestPyPI, installs from TestPyPI and smoke-tests it,
+and only then uploads to PyPI. Rehearse with `make release-dry`.
+
+See [docs/RELEASING.md](docs/RELEASING.md).
+
 ## Documentation
 
 Full interactive web documentation is available at:  
