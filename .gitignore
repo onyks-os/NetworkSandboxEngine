@@ -57,6 +57,12 @@ cover/
 
 # Django stuff:
 *.log
+
+# ...but the trace corpus is source, not output. `*.log` above silently kept
+# tests/fixtures/nft_trace/*.log out of every commit, so CI checked out a repo
+# whose parser fixtures did not exist. test_corpus_is_not_empty caught it, which
+# is the entire reason that test exists.
+!tests/fixtures/nft_trace/*.log
 local_settings.py
 db.sqlite3
 db.sqlite3-journal

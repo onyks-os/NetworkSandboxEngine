@@ -1,0 +1,5 @@
+trace id 3f1a2b4c inet my-table.v2 fwd-chain packet: iif "veth-a0"
+trace id 3f1a2b4c inet my-table.v2 fwd-chain rule 0x8 (handle 12) tcp dport 443 accept (verdict accept)
+trace id 3f1a2b4c inet my-table.v2 fwd-chain verdict accept
+trace id 4a2b3c5d inet "spaced table" "spaced chain" packet: iif "veth-a0"
+trace id 4a2b3c5d inet "spaced table" "spaced chain" policy drop

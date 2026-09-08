@@ -1,0 +1,6 @@
+trace id a0b1c2d3 inet nse_trace nse_trace_prerouting packet: iif "veth-nse"
+trace id a0b1c2d3 inet nse_trace nse_trace_prerouting rule 0x1 (handle 2) meta nftrace set 1
+trace id a0b1c2d3 inet nse_trace nse_trace_prerouting verdict continue
+trace id a0b1c2d3 ip filter input packet: iif "veth-nse"
+trace id a0b1c2d3 ip filter input rule 0x3 (handle 4) tcp dport 80 accept (verdict accept)
+trace id a0b1c2d3 ip filter input verdict accept

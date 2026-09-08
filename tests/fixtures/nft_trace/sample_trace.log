@@ -1,0 +1,5 @@
+trace id 1be8aad4 ip filter input packet: iif "veth0"
+trace id 1be8aad4 ip filter input rule 0x4 (handle 3) tcp dport 80 accept (verdict accept)
+trace id 1be8aad4 ip filter input verdict accept
+trace id 2fe9bce5 ip filter input packet: iif "veth0"
+trace id 2fe9bce5 ip filter input policy drop

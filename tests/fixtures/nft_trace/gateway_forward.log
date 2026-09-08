@@ -1,0 +1,9 @@
+trace id 7c0d1e2f ip nat prerouting packet: iif "vrh-abc12345"
+trace id 7c0d1e2f ip nat prerouting policy accept
+trace id 7c0d1e2f ip filter forward packet: iif "vrh-abc12345"
+trace id 7c0d1e2f ip filter forward rule 0x6 (handle 9) udp dport 53 accept (verdict accept)
+trace id 7c0d1e2f ip filter forward verdict accept
+trace id 7c0d1e2f ip nat postrouting packet: iif "vrh-abc12345"
+trace id 7c0d1e2f ip nat postrouting rule 0x7 (handle 11) masquerade
+trace id 8d1e2f30 ip filter forward packet: iif "vrh-abc12345"
+trace id 8d1e2f30 ip filter forward policy drop

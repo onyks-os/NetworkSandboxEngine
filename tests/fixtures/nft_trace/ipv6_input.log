@@ -1,0 +1,5 @@
+trace id 91ab00ff ip6 filter input packet: iif veth-nse
+trace id 91ab00ff ip6 filter input rule 0x2 (handle 5) tcp dport 80 accept (verdict accept)
+trace id 91ab00ff ip6 filter input verdict accept
+trace id 91ab0100 ip6 filter input packet: iif veth-nse
+trace id 91ab0100 ip6 filter input policy drop

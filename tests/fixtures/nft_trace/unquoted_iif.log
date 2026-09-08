@@ -1,0 +1,2 @@
+trace id b1c2d3e4 ip filter input packet: iif veth0
+trace id b1c2d3e4 ip filter input verdict drop
