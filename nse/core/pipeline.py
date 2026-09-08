@@ -3,6 +3,26 @@
 
 """
 Test pipeline: orchestrates a single NSE test run.
+
+The oracle contract
+-------------------
+
+A firewall test is a negative assertion ("this packet did not get through"), and
+a negative assertion is worthless unless the instrument is known to be working.
+So every run carries its own positive control: a *canary* packet is injected
+before the test packets and again after them, and the run is only reported as a
+result if the kernel trace for **both** canaries was observed.
+
+* The pre-canary replaces the old readiness probe, which signalled that this
+  process had scheduled its read loop — not that ``nft monitor trace`` had
+  actually subscribed to the kernel. Packets injected in that window were lost.
+* The post-canary proves the monitor was still watching when the last test
+  packet went in. It is what catches a trace deadline expiring mid-run, which
+  used to silently truncate the verdict stream.
+
+If either canary is not observed the pipeline emits an ``error`` event and the
+caller fails the test. It is never possible for this pipeline to report a clean
+verdict list that it did not actually measure.
 """
 
 from __future__ import annotations
@@ -21,16 +41,34 @@ from nse.core.netns_controller import NetnsController, TestRun
 from nse.core.rule_engine import RuleEngine, RuleValidationError
 from nse.core.scapy_injector import ScapyInjector
 from nse.core.trace_harvester import TraceHarvester
-from nse.models.test_request import TestRequest, TopologyType
+from nse.models.test_request import PacketSpec, TestRequest, TopologyType
 from nse.models.trace_event import TraceEvent
 
 logger = logging.getLogger("nse.core.pipeline")
 
 _VETH_PEER = "veth-nse"  # lives inside the netns
 
-# How long to wait for trace events after packet injection (seconds).
-_TRACE_TIMEOUT = 5.0
-_VERDICT_TIMEOUT = float(os.getenv("NSE_VERDICT_TIMEOUT", "2.0"))
+#: Seconds of inactivity the trace monitor tolerates before declaring a timeout.
+#: The deadline is *extended* by this much after every injection, so a long
+#: packet sequence can never outlive a deadline fixed when the loop started.
+_TRACE_IDLE_TIMEOUT = float(os.getenv("NSE_TRACE_IDLE_TIMEOUT", "5.0"))
+
+#: Settling time between injections, so trace events keep packet order.
+_INJECT_SETTLE = float(os.getenv("NSE_INJECT_SETTLE", "0.15"))
+
+#: Time given to the kernel to flush the last verdicts before conntrack is read.
+_DRAIN_DELAY = float(os.getenv("NSE_DRAIN_DELAY", "0.3"))
+
+# --- Canary (oracle positive control) -------------------------------------
+
+#: Ports the canary uses. Chosen high and fixed so a user suite that happens to
+#: test the same port still works: canaries are excluded by trace id, not port.
+_CANARY_DST_PORT = 64999
+_CANARY_SRC_PORT = 64998
+#: How many times a canary is re-injected before the oracle is declared blind.
+_CANARY_ATTEMPTS = int(os.getenv("NSE_CANARY_ATTEMPTS", "25"))
+#: How long to wait for each canary attempt to show up in the trace stream.
+_CANARY_INTERVAL = float(os.getenv("NSE_CANARY_INTERVAL", "0.2"))
 
 
 def parse_conntrack_line(line: str) -> dict[str, Any] | None:
@@ -121,6 +159,66 @@ def read_conntrack_table(netns: str, use_nsenter: bool = False) -> list[dict[str
     return entries
 
 
+def _canary_spec(dst_ip: str, src_ip: str) -> PacketSpec:
+    """Build the probe packet used as the oracle's positive control."""
+    return PacketSpec(
+        protocol="udp",
+        src_ip=src_ip,
+        dst_ip=dst_ip,
+        src_port=_CANARY_SRC_PORT,
+        dst_port=_CANARY_DST_PORT,
+    )
+
+
+async def _probe_oracle(
+    *,
+    label: str,
+    harvester: TraceHarvester,
+    injector: ScapyInjector,
+    spec: PacketSpec,
+    target_netns: str,
+    veth_host: str,
+    veth_peer: str,
+    host_netns: str | None,
+    attempts: int = _CANARY_ATTEMPTS,
+    interval: float = _CANARY_INTERVAL,
+) -> bool:
+    """
+    Inject a canary packet until its kernel trace is observed.
+
+    Returns True as soon as the harvester reports a *new* event, which is the
+    only evidence that the monitor is really attached to the kernel. Returns
+    False if no canary was ever seen, meaning the oracle is blind and nothing it
+    says about the test packets can be trusted.
+    """
+    loop = asyncio.get_running_loop()
+    for attempt in range(1, attempts + 1):
+        harvester.arm_event_signal()
+        harvester.extend_deadline(_TRACE_IDLE_TIMEOUT)
+        try:
+            await loop.run_in_executor(
+                None,
+                lambda: injector.inject(
+                    spec,
+                    target_netns,
+                    veth_host,
+                    veth_peer,
+                    host_netns,
+                ),
+            )
+        except Exception as exc:
+            logger.debug("%s canary injection attempt %d failed: %s", label, attempt, exc)
+            await asyncio.sleep(interval)
+            continue
+
+        if await harvester.wait_for_event(timeout=interval):
+            logger.info("%s canary observed after %d attempt(s)", label, attempt)
+            return True
+
+    logger.error("%s canary was never observed after %d attempts", label, attempts)
+    return False
+
+
 async def run_test_pipeline(
     request: TestRequest,
     controller: NetnsController | None = None,
@@ -130,8 +228,13 @@ async def run_test_pipeline(
     """
     Full test lifecycle coroutine.
 
-    Executes a test request in isolated Linux network namespaces, injecting packets
-    and collecting kernel nftables trace events.
+    Executes a test request in isolated Linux network namespaces, injecting
+    packets and collecting kernel nftables trace events.
+
+    The returned list never contains canary events: they are the pipeline's own
+    instrument check, not part of the user's test. If a canary is missed, the
+    list contains an ``error`` event instead of a verdict stream, so a caller
+    cannot mistake "the oracle saw nothing" for "nothing happened".
     """
     if controller is None:
         controller = NetnsController()
@@ -145,11 +248,25 @@ async def run_test_pipeline(
 
     event_queue = run.event_queue
     collected_events: list[TraceEvent] = []
+    canary_trace_ids: set[str] = set()
 
     async def emit_event(evt: TraceEvent | None) -> None:
         if evt is not None:
             collected_events.append(evt)
         await event_queue.put(evt)
+
+    async def emit_oracle_error(message: str) -> None:
+        """Report a failure of the *instrument*, not of the ruleset under test."""
+        logger.error("[%s] Oracle error: %s", run.test_id, message)
+        run.status = "error"
+        await emit_event(
+            TraceEvent(
+                type="error",
+                trace_id=run.test_id,
+                verdict="ERROR",
+                raw_message=f"oracle: {message}",
+            )
+        )
 
     run.status = "running"
     req = request
@@ -170,6 +287,10 @@ async def run_test_pipeline(
 
     loop = asyncio.get_running_loop()
     target_netns = router_ns if is_gateway else netns
+    veth_peer_target = veth_router_host if is_gateway else _VETH_PEER
+    # The "host" end of the injection link is in the root namespace for both
+    # topologies; the router namespace only owns the peer end.
+    host_netns: str | None = None
 
     try:
         # ------------------------------------------------------------------
@@ -223,26 +344,54 @@ async def run_test_pipeline(
         await loop.run_in_executor(None, engine.load, req.rules, target_netns)
 
         # ------------------------------------------------------------------
-        # 4. Start nft monitor trace & wait for readiness probe
+        # 4. Start nft monitor trace
         # ------------------------------------------------------------------
         logger.info("[%s] Starting nft monitor trace", run.test_id)
 
         def on_trace_event(evt: TraceEvent) -> None:
             collected_events.append(evt)
 
+        initial_timeout = max(
+            _TRACE_IDLE_TIMEOUT,
+            2.0 + _INJECT_SETTLE * len(req.packets) + _CANARY_ATTEMPTS * _CANARY_INTERVAL,
+        )
         await harvester.start(
             netns_name=target_netns,
             queue=event_queue,
-            timeout=_TRACE_TIMEOUT,
+            timeout=initial_timeout,
             use_nsenter=controller.use_nsenter,
             on_event=on_trace_event,
         )
-
-        # Readiness probe replacement for hardcoded delay
         await harvester.wait_ready(timeout=2.0)
 
         # ------------------------------------------------------------------
-        # 5. Inject Packet Sequence (Per-packet ordering-based injection)
+        # 5. Readiness canary — prove the oracle can see before trusting it
+        # ------------------------------------------------------------------
+        first_packet = req.packets[0]
+        canary = _canary_spec(dst_ip=first_packet.dst_ip, src_ip=first_packet.src_ip)
+        probe_kwargs = {
+            "harvester": harvester,
+            "injector": injector,
+            "spec": canary,
+            "target_netns": target_netns,
+            "veth_host": veth_host,
+            "veth_peer": veth_peer_target,
+            "host_netns": host_netns,
+        }
+
+        logger.info("[%s] Probing the oracle with a readiness canary", run.test_id)
+        if not await _probe_oracle(label="readiness", **probe_kwargs):  # type: ignore[arg-type]
+            await emit_oracle_error(
+                "readiness canary was never observed - `nft monitor trace` is not "
+                "reporting kernel events, so no verdict from this run would be "
+                "evidence of anything"
+            )
+            await emit_event(None)
+            return _without_canaries(collected_events, canary_trace_ids)
+        canary_trace_ids.update(harvester.seen_trace_ids)
+
+        # ------------------------------------------------------------------
+        # 6. Inject Packet Sequence (Per-packet ordering-based injection)
         # ------------------------------------------------------------------
         for idx, pkt in enumerate(req.packets, start=1):
             logger.info(
@@ -254,7 +403,7 @@ async def run_test_pipeline(
                 pkt.dst_ip,
                 pkt.dst_port,
             )
-            veth_peer_target = veth_router_host if is_gateway else _VETH_PEER
+            harvester.extend_deadline(_TRACE_IDLE_TIMEOUT)
             await loop.run_in_executor(
                 None,
                 injector.inject,
@@ -262,15 +411,29 @@ async def run_test_pipeline(
                 target_netns,
                 veth_host,
                 veth_peer_target,
+                host_netns,
             )
             # Short per-packet delay to let kernel trace process the verdict deterministically
-            await asyncio.sleep(0.15)
+            await asyncio.sleep(_INJECT_SETTLE)
+
+        await asyncio.sleep(_DRAIN_DELAY)
 
         # ------------------------------------------------------------------
-        # 6. Collect conntrack entries & finish
+        # 7. Liveness canary — prove the oracle was STILL seeing at the end
         # ------------------------------------------------------------------
-        await asyncio.sleep(0.3)
+        logger.info("[%s] Probing the oracle with a liveness canary", run.test_id)
+        before_liveness = set(harvester.seen_trace_ids)
+        if not await _probe_oracle(label="liveness", **probe_kwargs):  # type: ignore[arg-type]
+            await emit_oracle_error(
+                "liveness canary was never observed - the trace monitor stopped "
+                "reporting before the run finished, so the verdict stream is "
+                "truncated by an unknown amount"
+            )
+        canary_trace_ids.update(set(harvester.seen_trace_ids) - before_liveness)
 
+        # ------------------------------------------------------------------
+        # 8. Collect conntrack entries & finish
+        # ------------------------------------------------------------------
         ct_entries = await loop.run_in_executor(
             None, read_conntrack_table, target_netns, controller.use_nsenter
         )
@@ -283,9 +446,16 @@ async def run_test_pipeline(
                 )
             )
 
-        harvester.stop()
-        run.status = "done"
-        logger.info("[%s] Test pipeline finished successfully", run.test_id)
+        # ------------------------------------------------------------------
+        # 9. Close the monitor and report anything that made it untrustworthy
+        # ------------------------------------------------------------------
+        await harvester.aclose()
+        for problem in harvester.health_errors():
+            await emit_oracle_error(problem)
+
+        if run.status != "error":
+            run.status = "done"
+            logger.info("[%s] Test pipeline finished successfully", run.test_id)
 
     except RuleValidationError as exc:
         logger.warning("[%s] Rule validation error: %s", run.test_id, exc)
@@ -299,7 +469,7 @@ async def run_test_pipeline(
             )
         )
         await emit_event(None)
-        harvester.stop()
+        await harvester.aclose()
 
     except Exception as exc:
         logger.exception("[%s] Pipeline error", run.test_id)
@@ -313,7 +483,7 @@ async def run_test_pipeline(
             )
         )
         await emit_event(None)
-        harvester.stop()
+        await harvester.aclose()
 
     finally:
         # ------------------------------------------------------------------
@@ -350,4 +520,17 @@ async def run_test_pipeline(
             ),
         )
 
-    return collected_events
+    return _without_canaries(collected_events, canary_trace_ids)
+
+
+def _without_canaries(events: list[TraceEvent], canary_trace_ids: set[str]) -> list[TraceEvent]:
+    """
+    Drop the pipeline's own probe packets from the reported event stream.
+
+    The canaries are the instrument check. Leaving them in would make every
+    caller re-derive which events were theirs, and the first caller to forget
+    would silently count a probe as a verdict.
+    """
+    if not canary_trace_ids:
+        return events
+    return [e for e in events if not (e.trace_id and e.trace_id in canary_trace_ids)]

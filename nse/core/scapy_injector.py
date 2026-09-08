@@ -30,9 +30,21 @@ class ScapyInjector:
         netns_name: str,
         veth_host: str,
         veth_peer: str,
+        host_netns: str | None = None,
     ) -> None:
         """
         Construct and send a packet matching *spec* inside or into *netns_name*.
+
+        Args:
+            spec:        The packet to forge.
+            netns_name:  Namespace owning *veth_peer*.
+            veth_host:   Interface the packet is sent from.
+            veth_peer:   Interface inside *netns_name*.
+            host_netns:  Namespace owning *veth_host*, or None when it is in the
+                         root namespace. The caller knows this; it used to be
+                         guessed from the interface name and the guess produced a
+                         namespace ("nse_router_<suffix>") that never existed, so
+                         the MAC lookup could only ever fail.
         """
         logger.info(
             "Injecting %s packet: %s -> %s (netns=%s)",
@@ -43,11 +55,7 @@ class ScapyInjector:
         )
 
         try:
-            # Detect if host interface lives in a router namespace (gateway topology)
-            host_ns = None
-            if veth_host.startswith(("vrs-", "vrh-")):
-                suffix = veth_host.split("-")[1]
-                host_ns = f"nse_router_{suffix}"
+            host_ns = host_netns
             host_mac = _get_mac_address(veth_host, host_ns, self.use_nsenter)
             peer_mac = _get_mac_address(veth_peer, netns_name, self.use_nsenter)
         except Exception as exc:
