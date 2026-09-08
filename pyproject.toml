@@ -1,5 +1,7 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+# 77.0.0 is the floor for `license` as an SPDX string: the old TOML-table
+# form is deprecated and stops being supported on 2027-02-18.
+requires = ["setuptools>=77.0.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,7 +10,8 @@ version = "2.1.0"
 description = "Headless Python engine for isolated network namespace testing and PCAP assertions."
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "MIT"}
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     {name = "onyks"},
 ]
@@ -16,7 +19,6 @@ keywords = ["networking", "namespace", "testing", "nftables", "pcap", "scapy"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",

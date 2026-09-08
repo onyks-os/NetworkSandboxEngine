@@ -9,8 +9,8 @@ A release is one tag. Everything else is automation.
 
 ```bash
 make release-dry          # rehearse locally: checks, lint, tests, build, SBOM, checksums
-git tag -s v2.1.1 -m "NSE v2.1.1"
-git push origin v2.1.1    # this is the whole release
+git tag -s v2.1.0 -m "NSE v2.1.0"
+git push origin v2.1.0    # this is the whole release
 ```
 
 Pushing the tag runs `.github/workflows/release.yml`, which:
