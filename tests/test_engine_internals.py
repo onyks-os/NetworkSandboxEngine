@@ -856,14 +856,18 @@ def test_package_version_matches_pyproject() -> None:
     while pyproject declared 2.1.0. Reading it from installed metadata cannot
     drift, and this asserts the metadata matches the source of truth.
     """
-    import tomllib
+    import re
 
     import nse
 
-    pyproject = tomllib.loads(
-        (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text()
-    )
-    assert nse.__version__ == pyproject["project"]["version"]
+    text = (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text()
+    # Read it the way .github/workflows/release.yml does, rather than with
+    # tomllib: that is stdlib only from 3.11, and this suite runs on 3.10.
+    # Matching the workflow's own parse is also the point - it is the string the
+    # tag is checked against.
+    match = re.search(r'^version = "([^"]+)"', text, re.M)
+    assert match is not None, "pyproject.toml has no top-level version"
+    assert nse.__version__ == match.group(1)
 
 
 def test_public_api_is_importable() -> None:

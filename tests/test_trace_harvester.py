@@ -128,10 +128,13 @@ async def test_wait_for_event_is_false_when_nothing_arrives() -> None:
 
 
 async def test_arm_event_signal_requires_a_new_event() -> None:
-    harvester, _, _ = await start_with(ACCEPT_STREAM, hang_after=True)
+    # Exactly one event in the stream. With two, the second could be parsed
+    # after arm_event_signal() cleared the flag and set it again, which made
+    # this test depend on interpreter scheduling rather than on the behaviour.
+    harvester, _, _ = await start_with([ACCEPT_STREAM[0]], hang_after=True)
     assert await harvester.wait_for_event(timeout=1.0) is True
     harvester.arm_event_signal()
-    assert await harvester.wait_for_event(timeout=0.2) is False
+    assert await harvester.wait_for_event(timeout=0.3) is False
     await harvester.aclose()
 
 
