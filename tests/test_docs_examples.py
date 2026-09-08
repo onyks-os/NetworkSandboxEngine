@@ -16,9 +16,13 @@ import re
 from pathlib import Path
 
 import pytest
-import yaml
 
 from nse.cli.runner import build_case
+
+# pyyaml is a dev dependency, but a checkout installed with only the base
+# package cannot parse the examples. Skip rather than fail to import: a
+# collection error hides every other test in the run.
+yaml = pytest.importorskip("yaml", reason="pyyaml is required to validate the documented suites")
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DOC_FILES = sorted([REPO_ROOT / "README.md", *(REPO_ROOT / "docs").rglob("*.md")])

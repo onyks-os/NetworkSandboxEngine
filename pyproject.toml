@@ -37,6 +37,10 @@ cli = [
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
+    # The suite exercises the YAML runner and validates the YAML in the docs, so
+    # the parser is a dev dependency, not just a `[cli]` extra. Without it the
+    # runner and docs tests fail to import rather than skipping.
+    "pyyaml>=6.0",
     # The coverage ratchet in `make test-cov` is a gate, so the tool that
     # enforces it is a declared dependency and not something you happen to have.
     "pytest-cov>=5.0.0",
