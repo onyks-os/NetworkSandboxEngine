@@ -15,7 +15,7 @@ archived in 2.1.0; it remains in git history at tag `v2.0.0`.
 
 ## 2. Repository Layout
 
-```
+```text
 NetworkSandboxEngine/
 |
 |-- nse/                        # PyPI wheel (only this directory is packaged)
@@ -123,6 +123,7 @@ async def run_test_pipeline(
 ```
 
 Executing:
+
 1. Network topology setup
 2. Mock listener spawning (one per injected `dst_port`)
 3. Ruleset loading & kernel trace arming
@@ -147,7 +148,7 @@ appear in a caller's verdict stream. See
 
 ### 4.1 Simple (Host - Sandbox)
 
-```
+```text
   Root (Host) Namespace              Sandbox Namespace ("nse_XYZ")
 +------------------------+          +------------------------+
 |  iface: vhr-XYZ        |          |  iface: veth-nse       |
@@ -158,7 +159,7 @@ appear in a caller's verdict stream. See
 
 ### 4.2 Gateway (Host - Router - Server)
 
-```
+```text
    Host (Root)             Router Netns ("nsr_XYZ")             Server Netns ("nss_XYZ")
 +--------------+          +--------------------------------+     +--------------+
 | vhr-XYZ      |<- veth ->| vrh-XYZ  (10.0.1.2/fd00:1::2) |     | veth-nse     |

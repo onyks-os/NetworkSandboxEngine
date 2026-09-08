@@ -1,0 +1,248 @@
+name: Release
+
+# One tag, one release. Push `vX.Y.Z` and this builds, signs, publishes a GitHub
+# Release, uploads to TestPyPI, installs from TestPyPI to prove the distribution
+# is usable, and only then uploads to PyPI.
+#
+# Nothing about this is manual, and nothing is rebuilt between steps: the bytes
+# PyPI receives are the bytes Sigstore signed.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# Declared per job rather than globally: only `release` writes to the repository,
+# and each publishing job gets its own OIDC token scoped to its own environment.
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Build, sign, and publish the GitHub Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create the GitHub Release and upload assets
+      id-token: write   # Sigstore keyless signing via OIDC
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          # Full history so the previous tag can be resolved for the compare link.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[cli,dev]"
+
+      # The tag is the only thing a human types during a release, so it is the
+      # only thing that can silently disagree with the tree it points at.
+      # NSE has shipped 1.1.1 and 2.0.0 to PyPI with no git tag at all; this is
+      # the check that makes that impossible from here on.
+      - name: Verify the tag matches the packaged version
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          pkg_version="$(grep -m1 '^version = ' pyproject.toml | cut -d '"' -f2)"
+          if [ "$tag_version" != "$pkg_version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match pyproject.toml version $pkg_version"
+            exit 1
+          fi
+          echo "Releasing version $pkg_version"
+
+      - name: Lint, type-check, and import boundaries
+        run: make lint
+
+      - name: Unit tests with the coverage ratchet
+        run: make coverage
+
+      - name: Build sdist and wheel
+        run: make build
+
+      - name: Verify both distributions were produced
+        run: |
+          test -n "$(find dist -name '*.whl' -print -quit)" \
+            || { echo "::error::no wheel in dist/"; exit 1; }
+          test -n "$(find dist -name '*.tar.gz' -print -quit)" \
+            || { echo "::error::no sdist in dist/"; exit 1; }
+          ls -la dist/
+
+      - name: Generate SBOM
+        run: |
+          npm install -g @cyclonedx/cdxgen
+          cdxgen -o dist/sbom.json
+
+      - name: Generate checksums
+        run: make checksums
+
+      # Keyless signing: the certificate binds each artifact to this workflow and
+      # tag, so there is no long-lived private key to compromise.
+      # Verification instructions live in docs/verification.md.
+      - name: Sign artifacts with Sigstore
+        uses: sigstore/gh-action-sigstore-python@v3.5.0
+        with:
+          inputs: |
+            dist/*.whl
+            dist/*.tar.gz
+            dist/SHA256SUMS
+            dist/sbom.json
+
+      # The release body is the curated CHANGELOG section rather than a list of
+      # merged pull requests: on a repository whose work lands as direct commits,
+      # generate_release_notes produces a near-empty changelog.
+      - name: Assemble release notes from the CHANGELOG
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          make release-notes VERSION="$version" > RELEASE_NOTES.md
+          if [ ! -s RELEASE_NOTES.md ]; then
+            echo "::error::CHANGELOG.md has no section for $version"
+            exit 1
+          fi
+          prev_tag="$(git tag --list 'v*' --sort=-version:refname \
+                       | grep -vFx "${GITHUB_REF_NAME}" | head -n1 || true)"
+          {
+            echo
+            echo "---"
+            echo
+            if [ -n "$prev_tag" ]; then
+              echo "**Full Changelog**: https://github.com/${GITHUB_REPOSITORY}/compare/${prev_tag}...${GITHUB_REF_NAME}"
+            fi
+            echo "**Verifying these artifacts**: see [docs/verification.md](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/docs/verification.md)"
+          } >> RELEASE_NOTES.md
+          cat RELEASE_NOTES.md
+
+      - name: Create the GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.whl
+            dist/*.tar.gz
+            dist/SHA256SUMS
+            dist/sbom.json
+            dist/*.sigstore*
+          body_path: RELEASE_NOTES.md
+          generate_release_notes: false
+          fail_on_unmatched_files: true
+
+      # Hand the *signed* wheel and sdist to the publishing jobs. They must upload
+      # these exact bytes: rebuilding downstream would put a different artifact on
+      # PyPI than the one the Sigstore bundle attests to, under the same version.
+      - name: Stage the Python distributions for publication
+        run: |
+          mkdir -p dist_publish
+          cp dist/*.whl dist/*.tar.gz dist_publish/
+          ls -la dist_publish/
+
+      - name: Upload the distributions as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-distributions
+          path: dist_publish/
+          if-no-files-found: error
+          retention-days: 1
+
+  # ---------------------------------------------------------------------------
+  # Publication. TestPyPI first, and PyPI only after an installed smoke test of
+  # what actually landed there - so a broken distribution is caught on the index
+  # nobody depends on, not the one TTP's zero-leak suite depends on.
+  # ---------------------------------------------------------------------------
+
+  publish-testpypi:
+    name: Publish to TestPyPI
+    needs: release
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/network-sandbox-engine
+    permissions:
+      id-token: write   # Trusted Publishing: a short-lived OIDC token, no stored secret
+
+    steps:
+      - name: Download the distributions built by the release job
+        uses: actions/download-artifact@v4
+        with:
+          name: python-distributions
+          path: dist/
+
+      - name: Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          # Re-running an already-published tag should be a no-op here rather than
+          # a hard failure; TestPyPI is a rehearsal surface.
+          skip-existing: true
+
+  verify-testpypi:
+    name: Install from TestPyPI and smoke test
+    needs: publish-testpypi
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The index takes a little while to serve a freshly uploaded file, so poll
+      # rather than sleeping for a guessed interval.
+      - name: Install the published version from TestPyPI
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          echo "Waiting for network-sandbox-engine==$version to appear on TestPyPI..."
+          for attempt in $(seq 1 20); do
+            if pip install \
+                 --index-url https://test.pypi.org/simple/ \
+                 --extra-index-url https://pypi.org/simple/ \
+                 "network-sandbox-engine[cli]==$version"; then
+              echo "Installed on attempt $attempt."
+              exit 0
+            fi
+            echo "Not available yet (attempt $attempt/20), retrying in 15s..."
+            sleep 15
+          done
+          echo "::error::network-sandbox-engine==$version never became installable from TestPyPI"
+          exit 1
+
+      # Proves the distribution is not merely uploaded but usable: the console
+      # script resolves, the engine imports, and the version matches the tag.
+      - name: Smoke test the installed package
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          nse-runner --help > /dev/null
+          python -c "from nse.core.pipeline import run_test_pipeline" 
+          installed="$(python -c 'import nse; print(nse.__version__)')"
+          echo "Installed version: $installed"
+          if [ "$installed" != "$version" ]; then
+            echo "::error::Installed version $installed does not match tag $version"
+            exit 1
+          fi
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: verify-testpypi
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/network-sandbox-engine
+    permissions:
+      id-token: write
+
+    steps:
+      - name: Download the distributions built by the release job
+        uses: actions/download-artifact@v4
+        with:
+          name: python-distributions
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        # No skip-existing here on purpose: a version that already exists on PyPI
+        # means something is wrong with the release, and must fail loudly.

@@ -30,7 +30,7 @@ image, so a format change breaks a build instead of silently blinding the oracle
 
 ## Adding a capture from a new kernel
 
-```
+```text
 sudo scripts/capture_trace_fixture.sh <name>
 ```
 

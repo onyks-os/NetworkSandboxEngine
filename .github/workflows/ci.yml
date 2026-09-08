@@ -26,7 +26,21 @@ jobs:
     - name: Bootstrap Environment
       run: make setup
 
-    - name: Run Static Lints & Type Checks (Ruff, Mypy, Import-Linter)
+    # `make lint` runs ShellCheck and markdownlint when they are on PATH and
+    # prints "skipping" when they are not, so on a bare runner two of the five
+    # checks in the gate would quietly do nothing.
+    - name: Install ShellCheck and markdownlint
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y shellcheck
+        npm install -g markdownlint-cli
+
+    - name: Assert every linter is actually present
+      run: |
+        command -v shellcheck
+        command -v markdownlint
+
+    - name: Run every linter (Ruff, mypy, import-linter, ShellCheck, markdownlint)
       run: make lint
 
   unit:
@@ -52,7 +66,7 @@ jobs:
     # The floor lives in the Makefile so `make verify` locally and CI cannot
     # disagree about what "covered enough" means.
     - name: Run unit tests with the coverage ratchet
-      run: make test-cov
+      run: make coverage
 
   integration:
     # The trace parser has broken across nftables releases before, and a broken

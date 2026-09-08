@@ -30,7 +30,7 @@ running from a source checkout.
 
 The summary distinguishes the last case:
 
-```
+```text
 Test Suite Summary: 1 passed, 1 failed.
 1 of the failures are ORACLE errors: the engine could not observe what it
 needed to. Treat these as a broken measurement, not as a firewall defect.
