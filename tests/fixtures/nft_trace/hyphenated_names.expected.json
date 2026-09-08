@@ -1,0 +1,7 @@
+[
+  {"type": "hook", "trace_id": "3f1a2b4c", "family": "inet", "table": "my-table.v2", "chain": "fwd-chain", "hook": "veth-a0"},
+  {"type": "match", "trace_id": "3f1a2b4c", "family": "inet", "table": "my-table.v2", "chain": "fwd-chain", "rule_handle": 12, "rule_text": "tcp dport 443 accept", "verdict": "ACCEPT"},
+  {"type": "verdict", "trace_id": "3f1a2b4c", "family": "inet", "table": "my-table.v2", "chain": "fwd-chain", "verdict": "ACCEPT"},
+  {"type": "hook", "trace_id": "4a2b3c5d", "family": "inet", "table": "spaced table", "chain": "spaced chain", "hook": "veth-a0"},
+  {"type": "verdict", "trace_id": "4a2b3c5d", "family": "inet", "table": "spaced table", "chain": "spaced chain", "verdict": "DROP"}
+]

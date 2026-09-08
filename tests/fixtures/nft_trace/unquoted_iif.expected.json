@@ -1,0 +1,4 @@
+[
+  {"type": "hook", "trace_id": "b1c2d3e4", "family": "ip", "table": "filter", "chain": "input", "hook": "veth0"},
+  {"type": "verdict", "trace_id": "b1c2d3e4", "family": "ip", "table": "filter", "chain": "input", "verdict": "DROP"}
+]

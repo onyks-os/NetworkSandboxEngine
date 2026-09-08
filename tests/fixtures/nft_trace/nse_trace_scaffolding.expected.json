@@ -1,0 +1,8 @@
+[
+  {"type": "hook", "trace_id": "a0b1c2d3", "family": "inet", "table": "nse_trace", "chain": "nse_trace_prerouting", "hook": "veth-nse"},
+  {"type": "match", "trace_id": "a0b1c2d3", "table": "nse_trace", "rule_handle": 2, "rule_text": "meta nftrace set 1", "verdict": null},
+  {"type": "verdict", "trace_id": "a0b1c2d3", "table": "nse_trace", "verdict": "CONTINUE"},
+  {"type": "hook", "trace_id": "a0b1c2d3", "family": "ip", "table": "filter", "chain": "input", "hook": "veth-nse"},
+  {"type": "match", "trace_id": "a0b1c2d3", "table": "filter", "chain": "input", "rule_handle": 4, "rule_text": "tcp dport 80 accept", "verdict": "ACCEPT"},
+  {"type": "verdict", "trace_id": "a0b1c2d3", "table": "filter", "chain": "input", "verdict": "ACCEPT"}
+]

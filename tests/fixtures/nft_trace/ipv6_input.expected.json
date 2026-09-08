@@ -1,0 +1,7 @@
+[
+  {"type": "hook", "trace_id": "91ab00ff", "family": "ip6", "table": "filter", "chain": "input", "hook": "veth-nse"},
+  {"type": "match", "trace_id": "91ab00ff", "family": "ip6", "table": "filter", "chain": "input", "rule_handle": 5, "rule_text": "tcp dport 80 accept", "verdict": "ACCEPT"},
+  {"type": "verdict", "trace_id": "91ab00ff", "family": "ip6", "table": "filter", "chain": "input", "verdict": "ACCEPT"},
+  {"type": "hook", "trace_id": "91ab0100", "family": "ip6", "table": "filter", "chain": "input", "hook": "veth-nse"},
+  {"type": "verdict", "trace_id": "91ab0100", "family": "ip6", "table": "filter", "chain": "input", "verdict": "DROP"}
+]

@@ -1,0 +1,11 @@
+[
+  {"type": "hook", "trace_id": "7c0d1e2f", "family": "ip", "table": "nat", "chain": "prerouting", "hook": "vrh-abc12345"},
+  {"type": "verdict", "trace_id": "7c0d1e2f", "table": "nat", "chain": "prerouting", "verdict": "ACCEPT"},
+  {"type": "hook", "trace_id": "7c0d1e2f", "family": "ip", "table": "filter", "chain": "forward", "hook": "vrh-abc12345"},
+  {"type": "match", "trace_id": "7c0d1e2f", "table": "filter", "chain": "forward", "rule_handle": 9, "rule_text": "udp dport 53 accept", "verdict": "ACCEPT"},
+  {"type": "verdict", "trace_id": "7c0d1e2f", "table": "filter", "chain": "forward", "verdict": "ACCEPT"},
+  {"type": "hook", "trace_id": "7c0d1e2f", "family": "ip", "table": "nat", "chain": "postrouting", "hook": "vrh-abc12345"},
+  {"type": "match", "trace_id": "7c0d1e2f", "table": "nat", "chain": "postrouting", "rule_handle": 11, "rule_text": "masquerade", "verdict": null},
+  {"type": "hook", "trace_id": "8d1e2f30", "family": "ip", "table": "filter", "chain": "forward", "hook": "vrh-abc12345"},
+  {"type": "verdict", "trace_id": "8d1e2f30", "table": "filter", "chain": "forward", "verdict": "DROP"}
+]

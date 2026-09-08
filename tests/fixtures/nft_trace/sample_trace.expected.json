@@ -15,7 +15,7 @@
     "chain": "input",
     "rule_handle": 3,
     "rule_text": "tcp dport 80 accept",
-    "verdict": "accept"
+    "verdict": "ACCEPT"
   },
   {
     "type": "verdict",
