@@ -32,21 +32,17 @@ tests:
           udp dport 53 accept
         }
       }
-    mock_listeners:
-      - protocol: udp
-        port: 53
     packets:
       - protocol: udp
         src_ip: 10.0.1.1
         dst_ip: 10.0.2.2
         dst_port: 53
+        expected_verdict: ACCEPT
       - protocol: udp
         src_ip: 10.0.1.1
         dst_ip: 10.0.2.2
         dst_port: 54
-    expected_verdicts:
-      - ACCEPT
-      - DROP
+        expected_verdict: DROP
 ```
 
 ---

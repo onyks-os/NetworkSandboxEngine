@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "network-sandbox-engine"
-version = "2.0.0"
+version = "2.1.0"
 description = "Headless Python engine for isolated network namespace testing and PCAP assertions."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -34,14 +34,12 @@ dependencies = [
 cli = [
     "pyyaml>=6.0",
 ]
-gui = [
-    "fastapi>=0.111.0",
-    "uvicorn[standard]>=0.29.0",
-    "websockets>=12.0",
-]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
+    # The coverage ratchet in `make test-cov` is a gate, so the tool that
+    # enforces it is a declared dependency and not something you happen to have.
+    "pytest-cov>=5.0.0",
     "ruff",
     "import-linter",
     "mypy",
@@ -59,7 +57,7 @@ Repository = "https://github.com/onyks-os/NetworkSandboxEngine"
 Issues = "https://github.com/onyks-os/NetworkSandboxEngine/issues"
 
 [tool.setuptools.packages.find]
-include = ["nse", "nse.*"]   # Packages ONLY the core! gui/ and tests/ are excluded.
+include = ["nse", "nse.*"]   # Packages ONLY the engine; tests/ are excluded.
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -67,6 +65,9 @@ asyncio_mode = "strict"
 markers = [
     "integration: integration tests requiring root and real network namespaces",
 ]
+# Fail on an unregistered marker: a typo in a marker name silently deselects
+# the test it was meant to tag.
+addopts = "--strict-markers"
 filterwarnings = [
     "ignore:.*Diffie-Hellman over finite fields.*:Warning",
     "ignore:.*Diffie-Hellman over finite fields.*:DeprecationWarning",

@@ -44,8 +44,8 @@ graph TD
 
 ## Key Features
 
-- **In-Process Architecture**: Single-process root execution eliminating separate daemons (`rootd`) or IPC sockets.
-- **Deterministic Verdict Oracle**: Per-packet injection and kernel trace harvesting with instant readiness probes (`wait_ready()`).
+- **Library and CLI only**: no server, no socket, no daemon. Root privileges are held for the duration of a run and nothing listens.
+- **Self-verifying Oracle**: canary packets before and after every run prove the kernel trace was actually being observed, so a blind engine fails instead of reporting a clean result.
 - **Isolated Topologies**: Supports **Simple** (single sandbox netns) and **Gateway** (router + server netns chain) topologies.
 - **Scapy Packet Injection**: Forge arbitrary TCP, UDP, and ICMP packets across IPv4 and IPv6 protocols.
 - **Robust Netns Lifecycle**: Automated startup sweeps of orphan namespaces and veth pairs with exponential backoff teardowns.
@@ -94,6 +94,6 @@ asyncio.run(main())
 
 - **[Quickstart Guide](tutorials/quickstart.md)**: Get up and running in 5 minutes.
 - **[Test Suite YAML](tutorials/test-suites.md)**: Define declarative YAML test suites for CLI execution.
-- **[In-Process Integration](how-to/in-process-integration.md)**: Integrate NSE into FastAPI, Svelte, or Python applications.
+- **[Embedding NSE](how-to/in-process-integration.md)**: call the engine directly from your own Python test suite.
 - **[Architecture & Flow](explanation/architecture.md)**: In-depth breakdown of in-process netns execution.
 - **[Python API Reference](reference/api.md)**: Complete auto-generated Python API documentation.

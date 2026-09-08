@@ -1,4 +1,4 @@
-# Network Sandbox Engine (NSE) - Technical Architecture (v2.0.0)
+# Network Sandbox Engine (NSE) - Technical Architecture (v2.1.0)
 
 ## 1. System Goal
 
@@ -6,12 +6,10 @@ The Network Sandbox Engine (NSE) provides an isolated, deterministic testing env
 
 Unlike userspace packet filtering simulators, NSE leverages the actual Linux kernel network stack via Network Namespaces (`netns`) and Virtual Ethernet pairs (`veth`) to validate and trace real packets through real kernel code paths. This guarantees full fidelity to production Linux routing and firewall behavior.
 
-NSE ships in two layers:
-
-| Layer          | Package                  | Description                                                             |
-|----------------|--------------------------|-------------------------------------------------------------------------|
-| Headless Core  | `network-sandbox-engine` on PyPI | Pure Python library and CLI runner. Core dependencies: `scapy`, `pydantic`. |
-| GUI Layer      | In-repository (`gui/`)   | In-process FastAPI, Uvicorn, and Svelte web interface. Not on PyPI.   |
+NSE ships as one thing: `network-sandbox-engine` on PyPI, a Python library plus a
+CLI runner, depending only on `scapy` and `pydantic` (`pyyaml` for the `[cli]`
+extra). The FastAPI + Svelte web interface that earlier versions carried was
+archived in 2.1.0; it remains in git history at tag `v2.0.0`.
 
 ---
 
@@ -37,26 +35,30 @@ NetworkSandboxEngine/
 |   `-- cli/
 |       `-- runner.py           # nse-runner CLI entrypoint (YAML/JSON)
 |
-|-- gui/                        # Not on PyPI
-|   |-- server.py               # FastAPI app and Uvicorn CLI (In-process execution)
-|   |-- api/
-|   |   |-- routes.py           # POST /api/test, GET /test/{test_id}
-|   |   `-- websocket.py        # WS /ws/{test_id} trace event streaming
-|   `-- gui_svelte/             # Svelte + Vite frontend
-|
 |-- tests/
-|   |-- test_netns.py           # Unit test suite
-|   |-- test_trace_parser.py    # Golden file parser test suite
-|   `-- test_oracle_e2e.py      # Privileged e2e oracle integration tests
+|   |-- test_netns.py             # Legacy unit suite (namespaces, injection, models)
+|   |-- test_engine_internals.py  # Rule engine, controller, injector, listeners
+|   |-- test_trace_harvester.py   # Read-loop terminal states and blindness detection
+|   |-- test_trace_parser.py      # Golden-file corpus for the trace parser
+|   |-- test_runner_logic.py      # Pure decision logic of the CLI runner
+|   |-- test_runner_cli.py        # Runner exit codes with the pipeline stubbed
+|   |-- test_pipeline_unit.py     # Canary contract with every boundary stubbed
+|   |-- test_docs_examples.py     # The YAML in the docs must parse
+|   |-- test_oracle_e2e.py        # Privileged e2e oracle integration tests
+|   `-- fixtures/nft_trace/       # Golden `nft monitor trace` corpus
 |
 |-- pyproject.toml              # Build config (packages only nse/)
 |-- Makefile                    # Development & local CI automation
 `-- conftest.py                 # sys.path root injection for pytest
 ```
 
-### Architectural Boundary
+### Architectural Boundaries
 
-`nse/` must not import from `gui/`. `gui/` may freely import from `nse/`. The dependency is strictly one-directional, enforced by `import-linter` contracts (`make lint`).
+Enforced by `import-linter` contracts in `make lint`:
+
+- `nse.core` and `nse.models` must not import `nse.cli` - the engine cannot
+  depend on the CLI that drives it.
+- `nse.models` must not import the engine - models stay a leaf.
 
 `pydantic` is a mandatory core dependency of `nse/`.
 
@@ -82,9 +84,29 @@ Handles compilation and injection of `nftables` rulesets with enforced subproces
 
 ### 3.3 `TraceHarvester` (`nse/core/trace_harvester.py`)
 
-Parses `nft monitor trace` output into structured `TraceEvent` objects.
+Parses `nft monitor trace` output into structured `TraceEvent` objects, and makes
+every way it can stop seeing observable.
 
-- `wait_ready(timeout=2.0)`: readiness probe using `asyncio.Event` that signals when the trace monitor subprocess is up and reading.
+- `state` (`HarvestState`): why the read loop ended - `STOPPED` (we asked),
+  `CLEAN_EOF` (the monitor died on its own), `TIMEOUT`, or `ERROR`. Only
+  `STOPPED` is acceptable. These were previously indistinguishable: all four
+  pushed the same `None` sentinel.
+- `unparsed_trace_lines`: lines that look like trace output but that no pattern
+  matched. Any value above zero means the parser does not understand this
+  kernel's format, and is reported as an oracle error rather than a debug log.
+- `health_errors()`: the reasons this harvester cannot be trusted, which the
+  pipeline turns into `error` events.
+- `wait_for_event(timeout)`: resolves only once the kernel has actually delivered
+  a parsed event. This is the readiness proof the canary probe uses.
+- `wait_ready(timeout=2.0)`: signals that *this process* is reading. Retained for
+  diagnostics and explicitly **not** sufficient to conclude that a later packet
+  will be observed - it fires before `nft monitor trace` has subscribed to the
+  kernel.
+- `extend_deadline(seconds)`: pushes the inactivity deadline out. The read loop
+  polls its deadline so an extension takes effect mid-read; a fixed deadline
+  previously truncated long runs silently.
+- `aclose(timeout)`: stops the monitor and drains the read loop without
+  cancelling it mid-line, so the state it returns is trustworthy.
 - Supports an optional `on_event` callback for synchronous event collection alongside queue streaming.
 
 ### 3.4 `run_test_pipeline` (`nse/core/pipeline.py`)
@@ -101,13 +123,23 @@ async def run_test_pipeline(
 ```
 
 Executing:
-1. Rule syntax validation
-2. Network topology setup
-3. Mock listener spawning
-4. Ruleset loading & kernel trace arming
-5. Trace harvester startup with readiness probe
-6. Sequential packet injection & conntrack polling
-7. Full resource teardown in a `finally` block
+1. Network topology setup
+2. Mock listener spawning (one per injected `dst_port`)
+3. Ruleset loading & kernel trace arming
+4. Trace harvester startup
+5. **Readiness canary** - a probe packet is injected and re-injected until its
+   own kernel trace event is observed. If it never is, the run emits an oracle
+   error and the test packets are never injected: no verdict from a blind
+   monitor would be evidence of anything.
+6. Sequential packet injection, extending the trace deadline after each packet
+7. **Liveness canary** - a second probe after the last test packet, proving the
+   monitor was still watching. A miss means the verdict stream is truncated.
+8. Conntrack polling, harvester close, and health check
+9. Full resource teardown in a `finally` block
+
+Canary trace ids are stripped from the returned event list, so probes never
+appear in a caller's verdict stream. See
+[The Verdict Oracle](web/explanation/deterministic-oracle.md).
 
 ---
 
@@ -127,7 +159,7 @@ Executing:
 ### 4.2 Gateway (Host - Router - Server)
 
 ```
-   Host (Root)             Router Netns ("nse_router_XYZ")      Server Netns ("nse_server_XYZ")
+   Host (Root)             Router Netns ("nsr_XYZ")             Server Netns ("nss_XYZ")
 +--------------+          +--------------------------------+     +--------------+
 | vhr-XYZ      |<- veth ->| vrh-XYZ  (10.0.1.2/fd00:1::2) |     | veth-nse     |
 | 10.0.1.1     |          |                                |<- veth ->| 10.0.2.2     |
@@ -139,6 +171,7 @@ Executing:
 
 ## 5. Security and Isolation
 
-- **Namespace Isolation**: Rulesets are confined to isolated network namespaces identified by per-test UUIDs.
-- **In-Process Root Security**: The web server runs as a single root process with direct state management in FastAPI `app.state`.
+- **Namespace Isolation**: Rulesets are confined to isolated network namespaces identified by per-test UUIDs. `RuleEngine.load()` refuses an empty namespace name, so a missing argument cannot fall through to the host firewall.
+- **No listening surface**: NSE runs as root because `ip netns` and kernel tracing require it, but it opens no socket, port or RPC endpoint. It is invoked, it measures, it exits. The web server that ran in-process as root in 2.0.0 was removed in 2.1.0.
+- **Deterministic teardown**: namespaces and host-side veth interfaces are removed in a `finally` block with retry backoff, and a startup sweep removes anything a previously crashed run left behind.
 - **Pre-Validation**: `nft --check` runs before any `load()` call, preventing malformed rulesets from reaching the kernel.

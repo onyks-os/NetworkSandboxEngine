@@ -6,6 +6,116 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Thi
 
 ---
 
+## [2.1.0] - 2026-09-08
+
+Trustworthy oracle, archived web interface, and a test suite that can fail.
+
+The theme of this release is one defect repeated in several places: **a check
+that could not fail**. The CLI runner reported success when it observed nothing,
+the readiness probe signalled readiness before the kernel was listening, an
+unparsed trace line vanished at DEBUG level, and the parser's only test
+disappeared if its fixture directory were emptied. Each of those made a green
+result compatible with a blind instrument.
+
+### ⚠️ Breaking Changes
+
+- **Archived the web interface (`gui/`)**: the FastAPI + Svelte application, its
+  Uvicorn server, the `gui` extra and the `nse.service` unit are removed. Since
+  2.0.0 that server ran in-process **as root**, which is a large attack surface
+  for a testing tool with no external users. The code remains in git history at
+  tag `v2.0.0`. NSE is now a library and a CLI: no socket, no port, no RPC.
+- **Stricter suite-file schema**: unknown keys in a test case or a packet entry
+  are now errors instead of being silently defaulted. A misspelled
+  `expect_verdict` used to become an implicit expectation of `ACCEPT`. The
+  README's own YAML example was invalid under the real schema and has been
+  corrected.
+- **`REJECT` normalises to `DROP` in expectations**: the trace stream cannot
+  distinguish them, so an expectation of `REJECT` is compared as `DROP` rather
+  than never matching.
+- **`ScapyInjector.inject()` takes `host_netns`**: the namespace owning the
+  sending interface is now passed by the caller. It used to be derived from the
+  interface name as `nse_router_<suffix>`, a namespace nothing has ever created,
+  so gateway-topology MAC lookups could only fail.
+- **`match` events report upper-cased verdicts**, consistent with `verdict`
+  events. The same verdict previously had two spellings depending on the line it
+  came from.
+
+### Fixed
+
+- **The runner could report PASSED having observed nothing** (`nse/cli/runner.py`).
+  The count-mismatch branch printed `[FAIL] Oracle Error` without setting the
+  failure flag, and `zip(..., strict=False)` truncated the comparison in both
+  directions. A run with zero observed verdicts printed `=> SUCCESS` and exited
+  0 — including in this project's own CI, where the YAML runner is the
+  end-to-end gate.
+- **The readiness probe proved nothing** (`nse/core/trace_harvester.py`).
+  `wait_ready()` fired when the read loop was scheduled, not when `nft monitor
+  trace` had subscribed to the kernel, so packets injected in that window were
+  lost. It is retained for diagnostics and documented as insufficient.
+- **The trace deadline could expire mid-run** (`nse/core/pipeline.py`). A fixed
+  5-second budget, set when the loop started, truncated the verdict stream at
+  roughly 33 packets. The deadline is now extended after every injection, and
+  the read loop polls it so an extension actually takes effect.
+- **A crashed read loop was indistinguishable from a clean one**. Both pushed the
+  same `None` sentinel. The harvester now records a terminal state.
+- **Unparsed trace lines vanished silently**. They are counted; any line that
+  looks like trace output but matches no pattern is an oracle error.
+- **The parser could not read valid nftables identifiers**. Table and chain names
+  were matched with `\w+`, so any name containing `-`, `.` or `/`, or any quoted
+  name, failed to parse — silently. Quoted names containing spaces now parse too.
+- **Deleting the parser's fixtures deleted its tests**. `parametrize` over an
+  empty glob collects zero tests and reports success.
+- **`PacketSpec` validation errors escaped as tracebacks** instead of being
+  reported as a failed test case.
+
+### Added
+
+- **Canary probes as a permanent positive control** (`nse/core/pipeline.py`). A
+  probe packet is injected before the test packets and again after them; the run
+  is reported only if both were observed in the kernel trace. Canaries are
+  excluded from results by trace id. This is what makes a "no leak" result
+  evidence rather than a hope.
+- **`HarvestState` and `TraceHarvester.health_errors()`**: the read loop's
+  outcome (clean stop, unexpected EOF, timeout, crash) is explicit, and the
+  pipeline turns anything unhealthy into an `error` event the runner fails on.
+- **`NSE_FORCE_BLIND` and `make test-blind`**: a test hook that makes the parser
+  understand nothing, plus a CI job asserting the suite then *fails*. This is the
+  meta-test that guards the guard.
+- **Oracle errors are reported separately from firewall failures** in the runner
+  summary: a broken measurement and a broken ruleset are different problems.
+- **Golden corpus of six `nft monitor trace` fixtures** covering IPv6, gateway
+  forwarding and NAT, NSE's own scaffolding table, hyphenated and quoted
+  identifiers, and the quoted/unquoted `iif` variants — plus
+  `scripts/capture_trace_fixture.sh` for adding captures from new kernels.
+- **`test_parser_understands_every_line_of_a_real_trace`**: asserts on the actual
+  kernel under test that zero trace lines were unparsed. CI runs it on
+  `ubuntu-22.04` and `ubuntu-24.04`, so a format change breaks a build instead of
+  blinding the oracle.
+- **Coverage ratchet**: `make test-cov` enforces a floor (currently 98%), with
+  `pytest-cov` a declared dev dependency rather than something you happen to have.
+- **Runner logic is unit-testable**: `reduce_verdicts`, `build_case`,
+  `evaluate_case` and `load_suite` are pure functions. `nse/cli/runner.py` went
+  from **0%** to 98% coverage.
+- **`nse.core.mock_listener.main()`**: the CLI entry point is a function, so it
+  can be tested.
+- **Container runner image**: the Dockerfile now builds a CLI image for running a
+  suite against a pinned nftables version.
+
+### Changed
+
+- **Test coverage: 51% → 98%** across `nse/`, 21 tests → 232. The three modules
+  that carry correctness were the three least covered: `runner.py` 0% → 98%,
+  `pipeline.py` 30% → 99%, `trace_harvester.py` 35% → 98%.
+- **Import contracts rewritten** now that `gui/` is gone: `nse.core` and
+  `nse.models` may not import `nse.cli`, and `nse.models` may not import the
+  engine.
+- **`--strict-markers`**: a typo in a pytest marker silently deselected the test
+  it was meant to tag.
+- CI gained coverage, multi-image integration and blindness jobs, and lost the
+  Node 24 frontend job.
+
+---
+
 ## [2.0.0] - 2026-08-13
 
 Single-Process In-Process Architecture, Pydantic Hard Dependency, Deterministic Verdict Oracle, and Strict Static Typing.

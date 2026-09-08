@@ -91,12 +91,12 @@ nav:
       - Ruleset Debugging: tutorials/debugging-rulesets.md
       - Gateway Topology: tutorials/gateway-topology.md
   - How-To Guides:
-      - In-Process GUI Integration: how-to/in-process-integration.md
+      - Embedding NSE in Python: how-to/in-process-integration.md
       - Custom Packet Specs: how-to/custom-packets.md
       - CI/CD Automation: how-to/cicd-setup.md
   - Explanation:
-      - Architecture & In-Process Model: explanation/architecture.md
-      - Deterministic Oracle: explanation/deterministic-oracle.md
+      - Architecture & Privilege Model: explanation/architecture.md
+      - The Verdict Oracle: explanation/deterministic-oracle.md
       - Namespace Lifecycle & Naming: explanation/namespace-lifecycle.md
   - Reference:
       - CLI Commands: reference/cli.md

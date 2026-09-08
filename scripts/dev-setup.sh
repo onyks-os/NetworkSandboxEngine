@@ -4,13 +4,8 @@
 # =============================================================================
 # Usage: bash scripts/dev-setup.sh
 #
-# This script:
-#   1. Checks for required system tools (nft, ip, python3, node)
-#   2. Creates a Python virtual environment at .venv/
-#   3. Installs backend Python dependencies
-#   4. Installs frontend Node.js dependencies
-#
-# Run once after cloning. After that, use `make backend` and `make frontend`.
+# Creates .venv/ and installs the package with its cli and dev extras.
+# Run once after cloning; after that use `make test`, `make lint`, `make verify`.
 # =============================================================================
 
 set -euo pipefail
@@ -32,31 +27,22 @@ cd "$REPO_ROOT"
 # ---------------------------------------------------------------------------
 info "Checking system dependencies…"
 
-MISSING=()
-for cmd in python3 node npm; do
-  if ! command -v "$cmd" &>/dev/null; then
-    MISSING+=("$cmd")
-  fi
-done
-
-for cmd in nft ip; do
-  if ! command -v "$cmd" &>/dev/null; then
-    warn "$cmd not found — the daemon will not run without it."
-    warn "Install with: sudo apt install nftables iproute2"
-  fi
-done
-
-if [ ${#MISSING[@]} -ne 0 ]; then
-  error "Missing required tools: ${MISSING[*]}"
-  error "Install them and re-run this script."
+if ! command -v python3 &>/dev/null; then
+  error "python3 is required."
   exit 1
 fi
 
-# Check Python version >= 3.10
+for cmd in nft ip; do
+  if ! command -v "$cmd" &>/dev/null; then
+    warn "$cmd not found - the engine cannot build namespaces without it."
+    warn "Install with: sudo apt install nftables iproute2 conntrack"
+  fi
+done
+
 PY_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-PY_MAJOR=$(echo "$PY_VERSION" | cut -d. -f1)
-PY_MINOR=$(echo "$PY_VERSION" | cut -d. -f2)
-if [ "$PY_MAJOR" -lt 3 ] || ([ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -lt 10 ]); then
+PY_MAJOR=${PY_VERSION%%.*}
+PY_MINOR=${PY_VERSION##*.}
+if [ "$PY_MAJOR" -lt 3 ] || { [ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -lt 10 ]; }; then
   error "Python 3.10+ required (found $PY_VERSION)"
   exit 1
 fi
@@ -70,28 +56,10 @@ if [ ! -d ".venv" ]; then
   python3 -m venv .venv
 fi
 
-info "Activating virtual environment…"
-# shellcheck disable=SC1091
-source .venv/bin/activate
-
-# ---------------------------------------------------------------------------
-# 3. Python Package and Dependencies
-# ---------------------------------------------------------------------------
-info "Installing Python package and dependencies…"
-pip install --quiet --upgrade pip
-pip install --quiet -e ".[cli,gui,dev]"
-
-info "Python dependencies installed ✓"
-
-# ---------------------------------------------------------------------------
-# 4. Frontend dependencies
-# ---------------------------------------------------------------------------
-info "Installing frontend Node.js dependencies…"
-cd gui/gui_svelte
-npm install --silent
-cd ../..
-
-info "Frontend dependencies installed ✓"
+info "Installing the package and its development dependencies…"
+.venv/bin/pip install --quiet --upgrade pip
+.venv/bin/pip install --quiet -e ".[cli,dev]"
+info "Dependencies installed ✓"
 
 # ---------------------------------------------------------------------------
 # Done
@@ -100,8 +68,8 @@ echo ""
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
 echo -e "${GREEN}  NSE dev environment ready!${RESET}"
 echo ""
-echo "  Start root daemon:    make run-rootd"
-echo "  Start web server:     make run-web"
-echo "  Start the frontend:   make frontend"
-echo "  Or start all in tmux: make dev"
+echo "  Unit tests + coverage:  make test-cov"
+echo "  Static analysis:        make lint"
+echo "  Privileged oracle:      make integration-test"
+echo "  Blindness meta-test:    make test-blind"
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"

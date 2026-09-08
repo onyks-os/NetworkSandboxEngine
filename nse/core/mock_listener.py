@@ -114,15 +114,15 @@ def start_mock_listener(
     return proc
 
 
-if __name__ == "__main__":
+def main(argv: list[str] | None = None) -> None:
+    """Entry point for `python -m nse.core.mock_listener`."""
     parser = argparse.ArgumentParser(description="NSE Mock Listener Daemon")
     parser.add_argument("--proto", choices=["tcp", "udp"], default="tcp")
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--host", default="::")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
-    # If dual-stack isn't enabled or is blocked, let's fallback to IPv4 if host is "::" and bind fails,
-    # but since Linux typically supports IPv6 bind for dual-stack or explicitly IPv6, let's keep it direct.
+    # "::" binds dual-stack on Linux, so one listener serves IPv4 and IPv6.
     try:
         if args.proto == "tcp":
             run_tcp_server(args.host, args.port)
@@ -130,3 +130,7 @@ if __name__ == "__main__":
             run_udp_server(args.host, args.port)
     except KeyboardInterrupt:
         sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()

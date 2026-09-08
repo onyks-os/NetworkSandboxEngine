@@ -243,3 +243,7 @@ gui/gui_svelte/.svelte-kit/
 **/*.tar.gz
 
 network_sandbox_engine.egg-info
+
+# gui/ was archived in 2.1.0 (see CHANGELOG). Ignored so stale build output or
+# root-owned __pycache__ left over from `sudo make run-web` cannot be re-added.
+gui/

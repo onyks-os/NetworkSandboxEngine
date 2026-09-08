@@ -56,13 +56,12 @@ tests:
         src_ip: 10.0.0.1
         dst_ip: 10.0.0.2
         dst_port: 80
+        expected_verdict: ACCEPT
       - protocol: tcp
         src_ip: 10.0.0.1
         dst_ip: 10.0.0.2
         dst_port: 22
-    expected_verdicts:
-      - ACCEPT
-      - DROP
+        expected_verdict: DROP
 ```
 
 Run the test suite with root privileges:

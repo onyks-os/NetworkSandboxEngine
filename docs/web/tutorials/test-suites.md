@@ -8,24 +8,30 @@ NSE YAML test suites allow you to declare complex firewall test cases in a clean
 
 A test suite YAML file consists of a top-level `tests` array containing individual test cases:
 
-```yaml
+<!-- A schema sketch, not a runnable suite: fenced as `text` so
+     tests/test_docs_examples.py does not try to parse the placeholders. -->
+
+```text
 tests:
   - name: string               # Name of the test case
     topology: simple | gateway # Network topology type (default: simple)
     rules: string              # Raw nftables ruleset string
-    mock_listeners:            # (Optional) Mock background listeners inside netns
-      - protocol: tcp | udp
-        port: integer
     packets:                   # Sequence of synthetic packets to inject
       - protocol: tcp | udp | icmp
-        src_ip: string
-        dst_ip: string
+        src_ip: string         # Optional, defaults per topology
+        dst_ip: string         # Optional, defaults per topology
         src_port: integer      # Optional
         dst_port: integer      # Optional
-        tcp_flags: list        # Optional (e.g. ["SYN", "ACK"])
-    expected_verdicts:         # Expected kernel verdicts per injected packet
-      - ACCEPT | DROP | REJECT
+        tcp_flags: list        # Optional (e.g. ["S", "A"])
+        expected_verdict: ACCEPT | DROP | REJECT   # Optional, defaults to ACCEPT
 ```
+
+Unknown keys — in a case or in a packet — are **rejected**, not defaulted. A
+misspelled `expect_verdict` used to be absorbed into an implicit expectation of
+`ACCEPT`; it now fails the suite.
+
+A mock TCP/UDP listener is started automatically inside the sandbox for every
+`dst_port` you inject to, so there is nothing to declare.
 
 ---
 
@@ -43,36 +49,41 @@ tests:
           tcp dport 22 drop
         }
       }
-    mock_listeners:
-      - protocol: tcp
-        port: 80
-      - protocol: tcp
-        port: 443
     packets:
       - protocol: tcp
         src_ip: 10.0.0.1
         dst_ip: 10.0.0.2
         dst_port: 80
+        expected_verdict: ACCEPT
       - protocol: tcp
         src_ip: 10.0.0.1
         dst_ip: 10.0.0.2
         dst_port: 443
+        expected_verdict: ACCEPT
       - protocol: tcp
         src_ip: 10.0.0.1
         dst_ip: 10.0.0.2
         dst_port: 22
-    expected_verdicts:
-      - ACCEPT
-      - ACCEPT
-      - DROP
+        expected_verdict: DROP
 ```
 
 ---
 
 ## Strictly Enforced Verdict Matching
 
-NSE v2.0.0 enforces **strict length and ordering validation**:
+The runner fails when the number of **observed** verdicts differs from the number
+expected, in either direction:
 
-- The number of `expected_verdicts` **must match** the number of injected `packets`.
-- Missing verdicts are **never automatically padded** with dummy `DROP` values.
-- If a packet does not trigger a verdict, NSE flags a test failure immediately.
+- fewer observed than expected — the engine did not see something it should
+  have, so the missing verdict is missing evidence, not a pass;
+- more observed than expected — unfiltered traffic reached the ruleset, and the
+  extras are not quietly discarded.
+
+Either case is reported as an **oracle error** and exits `1`. Missing verdicts
+are never padded with dummy values.
+
+!!! warning "This was not true before 2.1.0"
+    Releases up to 2.0.0 printed `[FAIL] Oracle Error` on a count mismatch and
+    then reported the case as `SUCCESS` and exited `0`. A run that observed
+    nothing at all passed. If you have a CI pipeline pinned below 2.1.0, its
+    green builds do not mean what you think they mean.

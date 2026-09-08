@@ -42,11 +42,50 @@ Testing firewall rulesets on a live Linux system poses significant risks: malfor
 
 Network Sandbox Engine (NSE) provides a safe, reproducible testing harness. It constructs ephemeral Linux network namespaces, wires virtual ethernet pairs, compiles `nftables` rulesets, and injects synthetic Layer 2 and Layer 3 packets using Scapy. All evaluation happens inside the sandbox namespace: host firewall state is never altered.
 
-Key architectural advantages:
+Key architectural properties:
+
 * **Zero Host Mutation**: Rulesets are loaded exclusively into ephemeral sandbox namespaces (`nse_<uuid>`) and are completely removed during teardown.
-* **In-Process Root Execution**: Single-process root execution model for Python applications, eliminating socket daemons (`rootd`) and IPC overhead.
-* **Deterministic Oracle**: Parses kernel `nft monitor trace` events with an instant readiness probe (`wait_ready()`), mapping packet verdicts (`ACCEPT`, `DROP`, `REJECT`) directly without synthetic fallback padding.
+* **Self-verifying Oracle**: Every run injects a *canary* packet before the test packets and again after them, and reports a result only if the kernel trace for both was observed. See [The oracle contract](#the-oracle-contract).
 * **Dual-Stack and Topologies**: Native support for IPv4 and IPv6 traffic, plus multi-namespace Gateway topologies for router, NAT, and forwarding ruleset validation.
+* **Small, auditable surface**: One package, no web server, no JavaScript. `nse/` is ~1150 statements at 98% test coverage.
+
+### Requires root
+
+NSE creates network namespaces, loads nftables rulesets and reads kernel trace
+events, so it runs as root. It does not open a socket, a port or an RPC endpoint
+of any kind — it is a library and a CLI that you invoke, and it holds privileges
+only for the duration of a run.
+
+Version 2.1.0 removed the FastAPI/Svelte web interface that earlier releases
+shipped. That interface ran in-process as root from 2.0.0 onward, which was a
+large attack surface for a testing tool; the code remains in the git history at
+tag `v2.0.0` if you need it.
+
+---
+
+## The oracle contract
+
+A firewall test is a negative assertion — *"this packet did not get through"* —
+and a negative assertion is worth nothing unless the instrument is known to be
+working. A trace monitor that never attached to the kernel and a firewall that
+blocked everything produce byte-identical output.
+
+NSE therefore refuses to report a verdict it cannot show it measured:
+
+| Guarantee | Mechanism |
+| :--- | :--- |
+| The monitor was attached **before** the first test packet | A readiness canary is injected and re-injected until its kernel trace is observed. No observation, no run. |
+| The monitor was **still** attached after the last one | A liveness canary runs after injection. If it is missed, the verdict stream is declared truncated. |
+| The parser understood what the kernel said | Trace lines that no pattern matches are counted, and any count above zero is an error rather than a debug log. |
+| The monitor did not die quietly | The read loop records *why* it ended — clean stop, unexpected EOF, timeout or crash — and only a clean stop is acceptable. |
+| A missing verdict is not a pass | The CLI runner fails when the number of observed verdicts differs from the number expected, in either direction. |
+
+Canary packets are excluded from results by trace id, so they never appear in
+your verdict stream.
+
+The suite proves this holds, rather than asserting it: `make test-blind` forces
+the parser to understand nothing, and the build fails unless the runner exits
+non-zero. That job runs in CI on every push.
 
 ---
 
@@ -58,9 +97,8 @@ Key architectural advantages:
   * **Simple**: Single sandbox namespace (`nse_<id>`) wired directly to the host.
   * **Gateway**: Router (`nse_router_<id>`) and Server (`nse_server_<id>`) chain for forwarding and NAT testing.
 * **Automated Cleanup**: Startup sweeps detect and remove leftover namespaces and veth pairs from previous aborted runs. Teardowns include exponential backoff retries.
-* **CLI YAML Test Runner**: Execute declarative YAML test suites for automated CI/CD pipelines (`nse-runner`).
-* **Web UI and REST API**: Full-stack web interface built with FastAPI and Svelte for visual ruleset editing and real-time trace visualizer.
-* **Strict Quality Standards**: Full static type checking (`mypy --strict`), architectural boundary enforcement (`import-linter`), and `ruff` formatting.
+* **CLI YAML Test Runner**: Execute declarative YAML test suites for automated CI/CD pipelines (`nse-runner`). Exits non-zero on a wrong verdict *and* on a verdict it failed to observe.
+* **Strict Quality Standards**: Full static type checking (`mypy --strict`), architectural boundary enforcement (`import-linter`), `ruff` formatting, and a coverage ratchet (`make test-cov`, floor 98%).
 
 ---
 
@@ -92,7 +130,7 @@ pip install "network-sandbox-engine[cli]"
 
 ### 2. Manual Source Install
 
-For local development or running the web application:
+For local development:
 
 ```bash
 git clone https://github.com/onyks-os/NetworkSandboxEngine.git
@@ -161,30 +199,37 @@ tests:
         src_ip: 10.0.0.1
         dst_ip: 10.0.0.2
         dst_port: 80
+        expected_verdict: ACCEPT
       - protocol: tcp
         src_ip: 10.0.0.1
         dst_ip: 10.0.0.2
         dst_port: 22
-    expected_verdicts:
-      - ACCEPT
-      - DROP
+        expected_verdict: DROP
 ```
+
+`expected_verdict` is per packet. Unknown keys are rejected rather than
+defaulted, so a typo fails the suite instead of quietly becoming an expectation
+you never wrote.
 
 Run the suite with root privileges:
 
 ```bash
-sudo .venv/bin/python -m nse.cli.runner --file firewall_test.yaml
+sudo nse-runner --file firewall_test.yaml
 ```
 
-### 3. Web Interface and Server
+Exit codes: `0` all packets matched; `1` a verdict was wrong **or** the engine
+could not observe one. Oracle errors are reported separately from firewall
+failures, because they mean the measurement broke, not the ruleset.
 
-Launch the in-process web application server (FastAPI backend and Svelte frontend):
+### 3. In a container
 
 ```bash
-make dev
+podman build -t nse .
+podman run --rm --cap-add=NET_ADMIN --cap-add=NET_RAW \
+    -v "$PWD/firewall_test.yaml:/suite.yaml:ro" nse --file /suite.yaml
 ```
 
-Open `http://localhost:5173` in your browser to access the interactive web GUI.
+Useful for pinning the nftables version your rules are tested against.
 
 ---
 
@@ -241,9 +286,9 @@ NetworkSandboxEngine/
 │   ├── core/                   # Kernel primitives, pipeline, and naming rules
 │   ├── models/                 # Pydantic models (TestRequest, PacketSpec, TraceEvent)
 │   └── cli/                    # Headless YAML runner entrypoint
-├── gui/                        # Web server (FastAPI backend and Svelte frontend)
 ├── docs/                       # Architecture specs and MkDocs web documentation
 ├── tests/                      # Unit, golden file, and privileged e2e tests
+│   └── fixtures/nft_trace/     # Golden `nft monitor trace` corpus
 ├── pyproject.toml              # Build backend configuration
 └── Makefile                    # Local automation and CI workflow
 ```

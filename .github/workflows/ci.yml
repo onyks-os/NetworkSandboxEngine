@@ -11,6 +11,7 @@ permissions:
 
 jobs:
   lint:
+    name: Lint, types, import boundaries
     runs-on: ubuntu-latest
     steps:
     - name: Checkout Repository
@@ -29,7 +30,41 @@ jobs:
       run: make lint
 
   unit:
+    name: Unit tests + coverage ratchet (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.11', '3.12', '3.13']
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+        cache: 'pip'
+
+    - name: Bootstrap Environment
+      run: make setup
+
+    # The floor lives in the Makefile so `make verify` locally and CI cannot
+    # disagree about what "covered enough" means.
+    - name: Run unit tests with the coverage ratchet
+      run: make test-cov
+
+  integration:
+    # The trace parser has broken across nftables releases before, and a broken
+    # parser is a *silent* failure: it stops seeing rather than erroring. So the
+    # privileged suite runs on more than one runner image, which means more than
+    # one kernel and nftables version.
+    name: Oracle integration (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
     steps:
     - name: Checkout Repository
       uses: actions/checkout@v4
@@ -40,32 +75,31 @@ jobs:
         python-version: '3.11'
         cache: 'pip'
 
-    - name: Bootstrap Environment
-      run: make setup
+    - name: Install System Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y nftables iproute2 conntrack
 
-    - name: Run Python Unit Tests
-      run: make test
-
-  frontend:
-    runs-on: ubuntu-latest
-    steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v4
-
-    - name: Set up Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '24'
-        cache: 'npm'
-        cache-dependency-path: 'gui/gui_svelte/package-lock.json'
+    - name: Record the environment under test
+      run: |
+        uname -r
+        nft --version
+        ip -V
 
     - name: Bootstrap Environment
       run: make setup
 
-    - name: Build Svelte Frontend
-      run: make build-frontend
+    # Includes test_parser_understands_every_line_of_a_real_trace, which fails
+    # if this kernel emits a trace format the parser does not understand.
+    - name: Run privileged oracle integration tests
+      run: make integration-test
 
-  integration:
+  blindness:
+    # The meta-test. NSE_FORCE_BLIND makes the parser understand nothing, which
+    # is what a kernel format change looks like from the outside. The suite must
+    # FAIL. Before the canary probes existed it passed, which is precisely the
+    # defect this job exists to prevent from coming back.
+    name: A blind oracle must fail the suite
     runs-on: ubuntu-latest
     steps:
     - name: Checkout Repository
@@ -85,12 +119,11 @@ jobs:
     - name: Bootstrap Environment
       run: make setup
 
-    - name: Run Privileged Oracle Integration Tests
-      run: |
-        sudo .venv/bin/python -m pytest tests/ -v -m "integration"
-        sudo .venv/bin/python -m nse.cli.runner --file tests/test_suite.yaml
+    - name: Assert a blind parser fails the run
+      run: make test-blind
 
   smoke-pypi:
+    name: Package installs and imports
     runs-on: ubuntu-latest
     steps:
     - name: Checkout Repository
@@ -107,3 +140,4 @@ jobs:
         source .smoke_venv/bin/activate
         pip install -e ".[cli]"
         python -c "import nse; from nse.core.pipeline import run_test_pipeline; print('Smoke PyPI OK')"
+        nse-runner --help

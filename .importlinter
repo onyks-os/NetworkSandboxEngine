@@ -2,8 +2,16 @@
 root_package = nse
 include_external_packages = True
 
-[importlinter:contract:nse-headless]
-name = Headless Core import boundary
+[importlinter:contract:core-independence]
+name = Core must not depend on the CLI layer
 type = forbidden
-source_modules = nse
-forbidden_modules = gui
+source_modules = nse.core
+                 nse.models
+forbidden_modules = nse.cli
+
+[importlinter:contract:models-are-a-leaf]
+name = Models must not import the engine
+type = forbidden
+source_modules = nse.models
+forbidden_modules = nse.core
+                    nse.cli

@@ -191,7 +191,10 @@ def test_parse_match_line() -> None:
     assert event.trace_id == "1be8aad4"
     assert event.rule_handle == 3
     assert event.rule_text == "tcp dport 80 drop"
-    assert event.verdict == "drop"
+    # Normalised to upper case, like every other verdict the parser emits.
+    # It used to be passed through verbatim only on `match` events, so the same
+    # verdict had two spellings depending on which line it came from.
+    assert event.verdict == "DROP"
 
 
 def test_parse_verdict_line() -> None:
