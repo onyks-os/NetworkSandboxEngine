@@ -16,6 +16,8 @@ import sys
 import threading
 import time
 
+from nse.core.paths import resolve
+
 logger = logging.getLogger("nse.core.mock_listener")
 
 
@@ -91,9 +93,9 @@ def start_mock_listener(
     """Spawns a mock listener inside the namespace in a background process."""
     cmd = []
     if use_nsenter:
-        cmd += ["nsenter", f"--net=/var/run/netns/{netns_name}", "--"]
+        cmd += [resolve("nsenter"), f"--net=/var/run/netns/{netns_name}", "--"]
     else:
-        cmd += ["ip", "netns", "exec", netns_name]
+        cmd += [resolve("ip"), "netns", "exec", netns_name]
     cmd += [
         sys.executable,
         "-u",

@@ -38,6 +38,7 @@ from typing import Any, cast
 from nse.core.mock_listener import start_mock_listener
 from nse.core.naming import derive_names
 from nse.core.netns_controller import NetnsController, TestRun
+from nse.core.paths import resolve
 from nse.core.rule_engine import RuleEngine, RuleValidationError
 from nse.core.scapy_injector import ScapyInjector
 from nse.core.trace_harvester import TraceHarvester
@@ -125,13 +126,13 @@ def parse_conntrack_line(line: str) -> dict[str, Any] | None:
 
 def read_conntrack_table(netns: str, use_nsenter: bool = False) -> list[dict[str, Any]]:
     exec_cmd = (
-        ["nsenter", f"--net=/var/run/netns/{netns}", "--"]
+        [resolve("nsenter"), f"--net=/var/run/netns/{netns}", "--"]
         if use_nsenter
-        else ["ip", "netns", "exec", netns]
+        else [resolve("ip"), "netns", "exec", netns]
     )
     try:
         res = subprocess.run(
-            [*exec_cmd, "cat", "/proc/net/nf_conntrack"],
+            [*exec_cmd, resolve("cat"), "/proc/net/nf_conntrack"],
             capture_output=True,
             text=True,
             check=True,
@@ -140,7 +141,7 @@ def read_conntrack_table(netns: str, use_nsenter: bool = False) -> list[dict[str
     except (subprocess.CalledProcessError, OSError):
         try:
             res = subprocess.run(
-                [*exec_cmd, "cat", "/proc/net/ip_conntrack"],
+                [*exec_cmd, resolve("cat"), "/proc/net/ip_conntrack"],
                 capture_output=True,
                 text=True,
                 check=True,
@@ -514,7 +515,7 @@ async def run_test_pipeline(
         await loop.run_in_executor(
             None,
             lambda: subprocess.run(
-                ["ip", "link", "del", veth_host],
+                [resolve("ip"), "link", "del", veth_host],
                 capture_output=True,
                 check=False,
             ),

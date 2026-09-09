@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from nse.core.paths import resolve
 from nse.core.trace_harvester import (
     HarvestState,
     TraceHarvester,
@@ -278,7 +279,7 @@ async def test_start_uses_nsenter_in_containers() -> None:
         harvester = TraceHarvester()
         await harvester.start(netns_name="nse_x", queue=queue, timeout=5.0, use_nsenter=True)
         await harvester.aclose()
-    assert spawn.call_args[0][0] == "nsenter"
+    assert spawn.call_args[0][0] == resolve("nsenter")
 
 
 async def test_start_uses_ip_netns_exec_by_default() -> None:
@@ -288,7 +289,7 @@ async def test_start_uses_ip_netns_exec_by_default() -> None:
         harvester = TraceHarvester()
         await harvester.start(netns_name="nse_x", queue=queue, timeout=5.0)
         await harvester.aclose()
-    assert spawn.call_args[0][:4] == ("ip", "netns", "exec", "nse_x")
+    assert spawn.call_args[0][:4] == (resolve("ip"), "netns", "exec", "nse_x")
 
 
 async def test_aclose_cancels_a_read_loop_that_will_not_finish() -> None:

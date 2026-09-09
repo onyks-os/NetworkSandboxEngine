@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 
 from nse.core.naming import NETNS_SWEEP_PREFIXES, VETH_SWEEP_PREFIXES
+from nse.core.paths import resolve
 from nse.core.utils import is_in_container
 
 if TYPE_CHECKING:
@@ -130,7 +131,11 @@ class NetnsController:
         """Clean up orphan namespaces and veth pairs left behind by previous crashes."""
         try:
             res = subprocess.run(
-                ["ip", "netns", "list"], capture_output=True, text=True, check=False, timeout=5.0
+                [resolve("ip"), "netns", "list"],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=5.0,
             )
             if res.returncode == 0:
                 for line in res.stdout.splitlines():
@@ -138,7 +143,7 @@ class NetnsController:
                     if ns_name.startswith(NETNS_SWEEP_PREFIXES):
                         logger.info("Startup sweep: removing orphan netns %s", ns_name)
                         subprocess.run(
-                            ["ip", "netns", "del", ns_name],
+                            [resolve("ip"), "netns", "del", ns_name],
                             capture_output=True,
                             check=False,
                             timeout=5.0,
@@ -148,7 +153,11 @@ class NetnsController:
 
         try:
             res = subprocess.run(
-                ["ip", "link", "show"], capture_output=True, text=True, check=False, timeout=5.0
+                [resolve("ip"), "link", "show"],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=5.0,
             )
             if res.returncode == 0:
                 for line in res.stdout.splitlines():
@@ -158,7 +167,7 @@ class NetnsController:
                         if iface.startswith(VETH_SWEEP_PREFIXES):
                             logger.info("Startup sweep: removing orphan veth link %s", iface)
                             subprocess.run(
-                                ["ip", "link", "del", iface],
+                                [resolve("ip"), "link", "del", iface],
                                 capture_output=True,
                                 check=False,
                                 timeout=5.0,
@@ -168,9 +177,9 @@ class NetnsController:
 
     def exec_prefix(self, name: str) -> list[str]:
         if self.use_nsenter:
-            return ["nsenter", f"--net=/var/run/netns/{name}", "--"]
+            return [resolve("nsenter"), f"--net=/var/run/netns/{name}", "--"]
         else:
-            return ["ip", "netns", "exec", name]
+            return [resolve("ip"), "netns", "exec", name]
 
     def _run_in_netns(self, name: str, cmd: list[str]) -> subprocess.CompletedProcess[str]:
         return _run(self.exec_prefix(name) + cmd)
@@ -182,14 +191,14 @@ class NetnsController:
     def create_netns(self, name: str) -> None:
         """Create a new network namespace. Raises on failure."""
         logger.debug("Creating netns: %s", name)
-        _run(["ip", "netns", "add", name])
+        _run([resolve("ip"), "netns", "add", name])
         self._active_ns.add(name)
         # Disable DAD inside the netns to speed up IPv6 interface readiness
         try:
             self._run_in_netns(
                 name,
                 [
-                    "sysctl",
+                    resolve("sysctl"),
                     "-w",
                     "net.ipv6.conf.all.accept_dad=0",
                 ],
@@ -197,7 +206,7 @@ class NetnsController:
             self._run_in_netns(
                 name,
                 [
-                    "sysctl",
+                    resolve("sysctl"),
                     "-w",
                     "net.ipv6.conf.default.accept_dad=0",
                 ],
@@ -211,7 +220,7 @@ class NetnsController:
         delays = [0.1, 0.5, 1.0]
         for idx, delay in enumerate(delays):
             try:
-                _run(["ip", "netns", "del", name])
+                _run([resolve("ip"), "netns", "del", name])
                 break
             except subprocess.CalledProcessError as err:
                 stderr = err.stderr or ""
@@ -243,7 +252,7 @@ class NetnsController:
         self.create_netns(name)
 
         # Bring loopback interface up
-        self._run_in_netns(name, ["ip", "link", "set", "lo", "up"])
+        self._run_in_netns(name, [resolve("ip"), "link", "set", "lo", "up"])
 
         # Setup links
         self.create_veth_pair(
@@ -259,7 +268,7 @@ class NetnsController:
         finally:
             # Cleanup links
             with contextlib.suppress(subprocess.CalledProcessError, OSError):
-                _run(["ip", "link", "del", sandbox.ext_iface])
+                _run([resolve("ip"), "link", "del", sandbox.ext_iface])
 
             # Cleanup netns
             self.destroy_netns(name)
@@ -311,23 +320,23 @@ class NetnsController:
             v6_peer = "fd00::2/64"
 
         # Create veth pair in the root namespace
-        _run(["ip", "link", "add", veth_host, "type", "veth", "peer", "name", veth_peer])
+        _run([resolve("ip"), "link", "add", veth_host, "type", "veth", "peer", "name", veth_peer])
         # Move the peer end into the target namespace
-        _run(["ip", "link", "set", veth_peer, "netns", netns_name])
+        _run([resolve("ip"), "link", "set", veth_peer, "netns", netns_name])
 
         # --- Host side ---
         if v4_host:
-            _run(["ip", "addr", "add", v4_host, "dev", veth_host])
+            _run([resolve("ip"), "addr", "add", v4_host, "dev", veth_host])
         if v6_host:
-            _run(["ip", "addr", "add", v6_host, "dev", veth_host])
-        _run(["ip", "link", "set", veth_host, "up"])
+            _run([resolve("ip"), "addr", "add", v6_host, "dev", veth_host])
+        _run([resolve("ip"), "link", "set", veth_host, "up"])
 
         # --- Namespace side ---
         if v4_peer:
             self._run_in_netns(
                 netns_name,
                 [
-                    "ip",
+                    resolve("ip"),
                     "addr",
                     "add",
                     v4_peer,
@@ -339,7 +348,7 @@ class NetnsController:
             self._run_in_netns(
                 netns_name,
                 [
-                    "ip",
+                    resolve("ip"),
                     "addr",
                     "add",
                     v6_peer,
@@ -347,8 +356,8 @@ class NetnsController:
                     veth_peer,
                 ],
             )
-        self._run_in_netns(netns_name, ["ip", "link", "set", veth_peer, "up"])
-        self._run_in_netns(netns_name, ["ip", "link", "set", "lo", "up"])
+        self._run_in_netns(netns_name, [resolve("ip"), "link", "set", veth_peer, "up"])
+        self._run_in_netns(netns_name, [resolve("ip"), "link", "set", "lo", "up"])
 
     def create_gateway_topology(
         self,
@@ -377,11 +386,11 @@ class NetnsController:
         self.create_netns(server_ns)
 
         # Enable IPv4/IPv6 forwarding on router namespace
-        self._run_in_netns(router_ns, ["sysctl", "-w", "net.ipv4.ip_forward=1"])
+        self._run_in_netns(router_ns, [resolve("sysctl"), "-w", "net.ipv4.ip_forward=1"])
         self._run_in_netns(
             router_ns,
             [
-                "sysctl",
+                resolve("sysctl"),
                 "-w",
                 "net.ipv6.conf.all.forwarding=1",
             ],
@@ -390,7 +399,7 @@ class NetnsController:
         # 1. Create Host <-> Router veth pair
         _run(
             [
-                "ip",
+                resolve("ip"),
                 "link",
                 "add",
                 veth_host,
@@ -401,16 +410,16 @@ class NetnsController:
                 veth_router_host,
             ]
         )
-        _run(["ip", "link", "set", veth_router_host, "netns", router_ns])
+        _run([resolve("ip"), "link", "set", veth_router_host, "netns", router_ns])
 
-        _run(["ip", "addr", "add", host_v4, "dev", veth_host])
-        _run(["ip", "addr", "add", host_v6, "dev", veth_host])
-        _run(["ip", "link", "set", veth_host, "up"])
+        _run([resolve("ip"), "addr", "add", host_v4, "dev", veth_host])
+        _run([resolve("ip"), "addr", "add", host_v6, "dev", veth_host])
+        _run([resolve("ip"), "link", "set", veth_host, "up"])
 
         self._run_in_netns(
             router_ns,
             [
-                "ip",
+                resolve("ip"),
                 "addr",
                 "add",
                 router_host_v4,
@@ -421,7 +430,7 @@ class NetnsController:
         self._run_in_netns(
             router_ns,
             [
-                "ip",
+                resolve("ip"),
                 "addr",
                 "add",
                 router_host_v6,
@@ -432,7 +441,7 @@ class NetnsController:
         self._run_in_netns(
             router_ns,
             [
-                "ip",
+                resolve("ip"),
                 "link",
                 "set",
                 veth_router_host,
@@ -444,7 +453,7 @@ class NetnsController:
         self._run_in_netns(
             router_ns,
             [
-                "ip",
+                resolve("ip"),
                 "link",
                 "add",
                 veth_router_server,
@@ -458,7 +467,7 @@ class NetnsController:
         self._run_in_netns(
             router_ns,
             [
-                "ip",
+                resolve("ip"),
                 "link",
                 "set",
                 veth_server,
@@ -470,7 +479,7 @@ class NetnsController:
         self._run_in_netns(
             router_ns,
             [
-                "ip",
+                resolve("ip"),
                 "addr",
                 "add",
                 router_server_v4,
@@ -481,7 +490,7 @@ class NetnsController:
         self._run_in_netns(
             router_ns,
             [
-                "ip",
+                resolve("ip"),
                 "addr",
                 "add",
                 router_server_v6,
@@ -492,7 +501,7 @@ class NetnsController:
         self._run_in_netns(
             router_ns,
             [
-                "ip",
+                resolve("ip"),
                 "link",
                 "set",
                 veth_router_server,
@@ -503,7 +512,7 @@ class NetnsController:
         self._run_in_netns(
             server_ns,
             [
-                "ip",
+                resolve("ip"),
                 "addr",
                 "add",
                 server_v4,
@@ -514,7 +523,7 @@ class NetnsController:
         self._run_in_netns(
             server_ns,
             [
-                "ip",
+                resolve("ip"),
                 "addr",
                 "add",
                 server_v6,
@@ -522,20 +531,20 @@ class NetnsController:
                 veth_server,
             ],
         )
-        self._run_in_netns(server_ns, ["ip", "link", "set", veth_server, "up"])
+        self._run_in_netns(server_ns, [resolve("ip"), "link", "set", veth_server, "up"])
 
         # Bring up loopbacks
-        self._run_in_netns(router_ns, ["ip", "link", "set", "lo", "up"])
-        self._run_in_netns(server_ns, ["ip", "link", "set", "lo", "up"])
+        self._run_in_netns(router_ns, [resolve("ip"), "link", "set", "lo", "up"])
+        self._run_in_netns(server_ns, [resolve("ip"), "link", "set", "lo", "up"])
 
         # 3. Setup transit routing
         # Route on Host: Server subnet via Router host IP
         host_rt_via = router_host_v4.split("/")[0]
         host_rt_via6 = router_host_v6.split("/")[0]
-        _run(["ip", "route", "add", "10.0.2.0/24", "via", host_rt_via, "dev", veth_host])
+        _run([resolve("ip"), "route", "add", "10.0.2.0/24", "via", host_rt_via, "dev", veth_host])
         _run(
             [
-                "ip",
+                resolve("ip"),
                 "-6",
                 "route",
                 "add",
@@ -553,7 +562,7 @@ class NetnsController:
         self._run_in_netns(
             server_ns,
             [
-                "ip",
+                resolve("ip"),
                 "route",
                 "add",
                 "default",
@@ -566,7 +575,7 @@ class NetnsController:
         self._run_in_netns(
             server_ns,
             [
-                "ip",
+                resolve("ip"),
                 "-6",
                 "route",
                 "add",

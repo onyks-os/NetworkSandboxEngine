@@ -47,6 +47,8 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
+from nse.core.paths import resolve
+
 if TYPE_CHECKING:
     from nse.models.trace_event import TraceEvent
 
@@ -230,9 +232,16 @@ class TraceHarvester:
         self._stop_requested = False
         self.error = None
         if use_nsenter:
-            cmd = ["nsenter", f"--net=/var/run/netns/{netns_name}", "--", "nft", "monitor", "trace"]
+            cmd = [
+                resolve("nsenter"),
+                f"--net=/var/run/netns/{netns_name}",
+                "--",
+                resolve("nft"),
+                "monitor",
+                "trace",
+            ]
         else:
-            cmd = ["ip", "netns", "exec", netns_name, "nft", "monitor", "trace"]
+            cmd = [resolve("ip"), "netns", "exec", netns_name, resolve("nft"), "monitor", "trace"]
         logger.debug("Starting trace monitor: %s", " ".join(cmd))
 
         self._proc = await asyncio.create_subprocess_exec(

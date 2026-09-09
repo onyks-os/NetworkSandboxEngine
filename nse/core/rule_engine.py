@@ -15,6 +15,8 @@ import tempfile
 from dataclasses import dataclass
 from typing import Any
 
+from nse.core.paths import resolve
+
 logger = logging.getLogger("nse.core.rule_engine")
 
 _NFT_ERROR_RE = re.compile(
@@ -57,9 +59,9 @@ class RuleEngine:
 
     def exec_prefix(self, name: str) -> list[str]:
         if self.use_nsenter:
-            return ["nsenter", f"--net=/var/run/netns/{name}", "--"]
+            return [resolve("nsenter"), f"--net=/var/run/netns/{name}", "--"]
         else:
-            return ["ip", "netns", "exec", name]
+            return [resolve("ip"), "netns", "exec", name]
 
     def validate(self, rules: str) -> None:
         """
@@ -67,7 +69,7 @@ class RuleEngine:
         """
         with _temp_rules_file(rules) as path:
             result = subprocess.run(
-                ["nft", "--check", "-f", path],
+                [resolve("nft"), "--check", "-f", path],
                 capture_output=True,
                 text=True,
                 check=False,
@@ -90,7 +92,7 @@ class RuleEngine:
         full_ruleset = f"{_TRACE_INIT_RULESET}\n{rules}"
 
         with _temp_rules_file(full_ruleset) as path:
-            cmd = [*self.exec_prefix(netns_name), "nft", "-f", path]
+            cmd = [*self.exec_prefix(netns_name), resolve("nft"), "-f", path]
             result = subprocess.run(
                 cmd,
                 capture_output=True,
@@ -104,7 +106,7 @@ class RuleEngine:
 
     def flush(self, netns_name: str) -> None:
         """Remove all nftables rules from a namespace (safe cleanup)."""
-        cmd = [*self.exec_prefix(netns_name), "nft", "flush", "ruleset"]
+        cmd = [*self.exec_prefix(netns_name), resolve("nft"), "flush", "ruleset"]
         subprocess.run(
             cmd,
             capture_output=True,

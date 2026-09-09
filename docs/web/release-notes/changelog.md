@@ -6,6 +6,44 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Thi
 
 ---
 
+## [2.1.1] - 2026-09-10
+
+Security: the engine no longer resolves a root-executed binary through `$PATH`.
+
+### Security
+
+- **PATH hijacking closed.** NSE creates network namespaces and reads kernel
+  trace events, so it runs as root - and it invoked `ip`, `nft` and `nsenter`
+  **by bare name**, leaving the kernel to resolve them through `$PATH`. Anyone
+  able to influence the environment of the `sudo` invocation could place their
+  own `ip` earlier in the search order and have it executed with full
+  privileges.
+
+  This is the same defect that TTP closed in its 0.4.8 cycle, and it mattered
+  more here than it looks: NSE is the instrument TTP's zero-leak claim rests on.
+  A verification engine with a privilege-escalation path is a strange thing to
+  trust about a firewall.
+
+  New `nse/core/paths.py` resolves every binary against a fixed list of
+  root-owned system directories, never `$PATH`, and refuses one that is group-
+  or world-writable, or that sits in a writable directory - write access there
+  is enough to replace the file by rename. `BinaryNotFoundError` is a
+  `FileNotFoundError`, so callers that already handled a missing tool keep
+  working unchanged.
+
+  66 call sites migrated. The deliverable is
+  `test_a_hostile_nft_on_path_is_not_executed` and
+  `test_the_engine_really_invokes_the_trusted_binary`, which plant a hostile
+  binary first on `$PATH` and assert the argv handed to `subprocess` still names
+  the trusted absolute path - the second catches a call site the migration
+  missed, which asserting on `resolve()` alone would not.
+
+### Changed
+
+- Test coverage 98.45% → 98.09% across a larger surface: 239 → 259 tests.
+
+---
+
 ## [2.1.0] - 2026-09-08
 
 Trustworthy oracle, archived web interface, and a test suite that can fail.

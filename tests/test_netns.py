@@ -19,6 +19,7 @@ import pytest
 
 from nse.core.mock_listener import start_mock_listener
 from nse.core.netns_controller import NetnsController
+from nse.core.paths import resolve
 from nse.core.pipeline import parse_conntrack_line
 from nse.core.rule_engine import RuleEngine, RuleValidationError
 from nse.core.scapy_injector import ScapyInjector
@@ -41,11 +42,11 @@ def test_netns_lifecycle(mock_run: MagicMock) -> None:
     controller = NetnsController()
 
     controller.create_netns("nse_test")
-    mock_run.assert_any_call(["ip", "netns", "add", "nse_test"])
+    mock_run.assert_any_call([resolve("ip"), "netns", "add", "nse_test"])
     assert "nse_test" in controller._active_ns
 
     controller.destroy_netns("nse_test")
-    mock_run.assert_any_call(["ip", "netns", "del", "nse_test"])
+    mock_run.assert_any_call([resolve("ip"), "netns", "del", "nse_test"])
     assert "nse_test" not in controller._active_ns
 
 
@@ -56,7 +57,7 @@ def test_create_veth_pair(mock_run: MagicMock) -> None:
 
     calls = [c[0][0] for c in mock_run.call_args_list]
     assert [
-        "ip",
+        resolve("ip"),
         "link",
         "add",
         "veth-host",
@@ -66,15 +67,15 @@ def test_create_veth_pair(mock_run: MagicMock) -> None:
         "name",
         "veth-nse",
     ] in calls
-    assert ["ip", "link", "set", "veth-nse", "netns", "nse_test"] in calls
-    assert ["ip", "addr", "add", "10.0.0.1/24", "dev", "veth-host"] in calls
-    assert ["ip", "link", "set", "veth-host", "up"] in calls
+    assert [resolve("ip"), "link", "set", "veth-nse", "netns", "nse_test"] in calls
+    assert [resolve("ip"), "addr", "add", "10.0.0.1/24", "dev", "veth-host"] in calls
+    assert [resolve("ip"), "link", "set", "veth-host", "up"] in calls
     assert [
-        "ip",
+        resolve("ip"),
         "netns",
         "exec",
         "nse_test",
-        "ip",
+        resolve("ip"),
         "addr",
         "add",
         "10.0.0.2/24",
@@ -92,7 +93,7 @@ def test_create_veth_pair(mock_run: MagicMock) -> None:
 def test_rule_engine_validation_success(mock_run: MagicMock) -> None:
     engine = RuleEngine()
     mock_run.return_value = subprocess.CompletedProcess(
-        args=["nft", "--check", "-f", "dummy.nft"], returncode=0, stdout="", stderr=""
+        args=[resolve("nft"), "--check", "-f", "dummy.nft"], returncode=0, stdout="", stderr=""
     )
 
     engine.validate("table ip filter {}")
@@ -103,7 +104,7 @@ def test_rule_engine_validation_success(mock_run: MagicMock) -> None:
 def test_rule_engine_validation_failure(mock_run: MagicMock) -> None:
     engine = RuleEngine()
     mock_run.return_value = subprocess.CompletedProcess(
-        args=["nft", "--check", "-f", "dummy.nft"],
+        args=[resolve("nft"), "--check", "-f", "dummy.nft"],
         returncode=1,
         stdout="",
         stderr="/tmp/rules_abc.nft:3:12-15: Error: syntax error, unexpected policy",
@@ -161,7 +162,7 @@ def test_scapy_injector_outgoing(mock_run: MagicMock, mock_get_mac: MagicMock) -
     injector.inject(spec, "nse_test", "veth-host", "veth-nse")
 
     called_cmd = mock_run.call_args[0][0]
-    assert called_cmd[:4] == ["ip", "netns", "exec", "nse_test"]
+    assert called_cmd[:4] == [resolve("ip"), "netns", "exec", "nse_test"]
 
 
 # ===========================================================================
@@ -327,14 +328,14 @@ def test_create_gateway_topology(mock_run: MagicMock) -> None:
     )
 
     calls = [c[0][0] for c in mock_run.call_args_list]
-    assert ["ip", "netns", "add", "nse_router_t1"] in calls
-    assert ["ip", "netns", "add", "nse_server_t1"] in calls
+    assert [resolve("ip"), "netns", "add", "nse_router_t1"] in calls
+    assert [resolve("ip"), "netns", "add", "nse_server_t1"] in calls
     assert [
-        "ip",
+        resolve("ip"),
         "netns",
         "exec",
         "nse_router_t1",
-        "sysctl",
+        resolve("sysctl"),
         "-w",
         "net.ipv4.ip_forward=1",
     ] in calls
@@ -353,7 +354,7 @@ def test_start_mock_listener(mock_popen: MagicMock) -> None:
 
     assert mock_popen.called
     cmd_args = mock_popen.call_args[0][0]
-    assert cmd_args[:4] == ["ip", "netns", "exec", "nse_server_t1"]
+    assert cmd_args[:4] == [resolve("ip"), "netns", "exec", "nse_server_t1"]
     assert "--proto" in cmd_args
     assert "tcp" in cmd_args
     assert "--port" in cmd_args
@@ -432,7 +433,7 @@ async def test_real_namespace_context_manager() -> None:
     with pytest.raises(subprocess.CalledProcessError):
         await asyncio.to_thread(
             subprocess.run,
-            ["ip", "netns", "exec", "ttp_real", "ip", "addr"],
+            [resolve("ip"), "netns", "exec", "ttp_real", resolve("ip"), "addr"],
             check=True,
             capture_output=True,
         )

@@ -19,6 +19,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from nse.core import pipeline as pipeline_module
+from nse.core.paths import resolve
 from nse.core.pipeline import (
     _canary_spec,
     _probe_oracle,
@@ -389,7 +390,7 @@ def test_read_conntrack_table_returns_empty_when_both_paths_fail() -> None:
 def test_read_conntrack_table_uses_nsenter_when_asked() -> None:
     with patch("subprocess.run", return_value=MagicMock(stdout="")) as run:
         read_conntrack_table("nse_x", use_nsenter=True)
-    assert run.call_args[0][0][0] == "nsenter"
+    assert run.call_args[0][0][0] == resolve("nsenter")
 
 
 # ---------------------------------------------------------------------------

@@ -29,6 +29,7 @@ from nse.core.naming import (
     derive_names,
 )
 from nse.core.netns_controller import NetnsController, _run
+from nse.core.paths import resolve
 from nse.core.rule_engine import (
     RuleEngine,
     RuleValidationError,
@@ -197,7 +198,7 @@ def test_rule_engine_load_targets_the_requested_namespace() -> None:
     with patch("subprocess.run", return_value=MagicMock(returncode=0)) as run:
         RuleEngine().load("table ip filter {}", "nse_x")
     assert run.call_count == 1
-    assert run.call_args[0][0][:4] == ["ip", "netns", "exec", "nse_x"]
+    assert run.call_args[0][0][:4] == [resolve("ip"), "netns", "exec", "nse_x"]
 
 
 def test_rule_engine_load_writes_the_scaffolding_into_the_file() -> None:
@@ -227,7 +228,7 @@ def test_rule_engine_load_raises_on_nft_rejection() -> None:
 
 def test_rule_engine_uses_nsenter_when_configured() -> None:
     engine = RuleEngine(use_nsenter=True)
-    assert engine.exec_prefix("nse_x") == ["nsenter", "--net=/var/run/netns/nse_x", "--"]
+    assert engine.exec_prefix("nse_x") == [resolve("nsenter"), "--net=/var/run/netns/nse_x", "--"]
 
 
 def test_rule_engine_flush_is_best_effort() -> None:
@@ -289,7 +290,7 @@ def test_create_netns_tolerates_missing_sysctl(controller: NetnsController) -> N
 
     with patch("nse.core.netns_controller._run", side_effect=fake_run):
         controller.create_netns("nse_x")
-    assert ["ip", "netns", "add", "nse_x"] in calls
+    assert [resolve("ip"), "netns", "add", "nse_x"] in calls
     assert "nse_x" in controller._active_ns
 
 
@@ -306,9 +307,9 @@ def test_startup_sweep_removes_orphans() -> None:
     deletions: list[list[str]] = []
 
     def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
-        if cmd[:3] == ["ip", "netns", "list"]:
+        if cmd[:3] == [resolve("ip"), "netns", "list"]:
             return netns_list
-        if cmd[:3] == ["ip", "link", "show"]:
+        if cmd[:3] == [resolve("ip"), "link", "show"]:
             return link_list
         deletions.append(cmd)
         return MagicMock(returncode=0)
@@ -316,8 +317,8 @@ def test_startup_sweep_removes_orphans() -> None:
     with patch("subprocess.run", side_effect=fake_run):
         NetnsController(use_nsenter=False)
 
-    assert ["ip", "netns", "del", "nse_dead"] in deletions
-    assert ["ip", "link", "del", "vhr-dead"] in deletions
+    assert [resolve("ip"), "netns", "del", "nse_dead"] in deletions
+    assert [resolve("ip"), "link", "del", "vhr-dead"] in deletions
     assert not any("eth0" in c for c in deletions)
 
 
@@ -359,14 +360,14 @@ def test_get_mac_address_enters_the_namespace_when_asked() -> None:
     out = MagicMock(stdout="link/ether aa:bb:cc:dd:ee:ff")
     with patch("subprocess.run", return_value=out) as run:
         _get_mac_address("veth0", netns_name="nse_x")
-    assert run.call_args[0][0][:4] == ["ip", "netns", "exec", "nse_x"]
+    assert run.call_args[0][0][:4] == [resolve("ip"), "netns", "exec", "nse_x"]
 
 
 def test_get_mac_address_uses_nsenter_in_containers() -> None:
     out = MagicMock(stdout="link/ether aa:bb:cc:dd:ee:ff")
     with patch("subprocess.run", return_value=out) as run:
         _get_mac_address("veth0", netns_name="nse_x", use_nsenter=True)
-    assert run.call_args[0][0][0] == "nsenter"
+    assert run.call_args[0][0][0] == resolve("nsenter")
 
 
 @pytest.mark.parametrize(
@@ -412,7 +413,7 @@ def test_start_mock_listener_builds_the_namespace_command() -> None:
     with patch("subprocess.Popen") as popen, patch("time.sleep"):
         start_mock_listener("nse_x", "TCP", 8080)
     cmd = popen.call_args[0][0]
-    assert cmd[:4] == ["ip", "netns", "exec", "nse_x"]
+    assert cmd[:4] == [resolve("ip"), "netns", "exec", "nse_x"]
     assert "--proto" in cmd
     assert "tcp" in cmd
     assert "8080" in cmd
@@ -421,7 +422,7 @@ def test_start_mock_listener_builds_the_namespace_command() -> None:
 def test_start_mock_listener_uses_nsenter_in_containers() -> None:
     with patch("subprocess.Popen") as popen, patch("time.sleep"):
         start_mock_listener("nse_x", "udp", 53, use_nsenter=True)
-    assert popen.call_args[0][0][0] == "nsenter"
+    assert popen.call_args[0][0][0] == resolve("nsenter")
 
 
 def _free_port() -> int:
@@ -495,7 +496,7 @@ async def test_sandbox_exec_returns_output() -> None:
 
     with patch("asyncio.create_subprocess_exec", _async_return(proc)):
         sandbox = NamespaceSandbox(
-            MagicMock(exec_prefix=lambda n: ["ip", "netns", "exec", n]), "nse_x"
+            MagicMock(exec_prefix=lambda n: [resolve("ip"), "netns", "exec", n]), "nse_x"
         )
         result = await sandbox.exec("echo hello")
     assert result.stdout == b"hello"
@@ -509,7 +510,9 @@ async def test_sandbox_exec_raises_on_failure() -> None:
     proc.communicate = _async_return((b"", b"boom"))
     proc.returncode = 2
 
-    sandbox = NamespaceSandbox(MagicMock(exec_prefix=lambda n: ["ip", "netns", "exec", n]), "nse_x")
+    sandbox = NamespaceSandbox(
+        MagicMock(exec_prefix=lambda n: [resolve("ip"), "netns", "exec", n]), "nse_x"
+    )
     with (
         patch("asyncio.create_subprocess_exec", _async_return(proc)),
         pytest.raises(subprocess.CalledProcessError),
@@ -525,7 +528,9 @@ async def test_sandbox_exec_treats_a_missing_returncode_as_failure() -> None:
     proc.communicate = _async_return((b"", b""))
     proc.returncode = None
 
-    sandbox = NamespaceSandbox(MagicMock(exec_prefix=lambda n: ["ip", "netns", "exec", n]), "nse_x")
+    sandbox = NamespaceSandbox(
+        MagicMock(exec_prefix=lambda n: [resolve("ip"), "netns", "exec", n]), "nse_x"
+    )
     with (
         patch("asyncio.create_subprocess_exec", _async_return(proc)),
         pytest.raises(subprocess.CalledProcessError),
@@ -580,7 +585,7 @@ def test_injector_detects_the_outgoing_direction() -> None:
         patch("subprocess.run", return_value=MagicMock(returncode=0, stdout="", stderr="")) as run,
     ):
         ScapyInjector().inject(spec, "nse_x", "vhr-x", "veth-nse")
-    assert run.call_args[0][0][:4] == ["ip", "netns", "exec", "nse_x"]
+    assert run.call_args[0][0][:4] == [resolve("ip"), "netns", "exec", "nse_x"]
 
 
 def test_injector_raises_when_the_outgoing_script_fails() -> None:
