@@ -23,7 +23,11 @@ PROJECT_SLUG  := NetworkSandboxEngine
 PROJECT_PKG   := nse
 PROJECT_DIST  := network-sandbox-engine
 GITHUB_OWNER  := onyks-os
-VERSION       := 2.1.0
+# Read from pyproject rather than restated here: two copies of a version number
+# drift, and the one that drifts is always the one nobody edits. `release-check`
+# printed "tag v2.1.0" while the package built as 2.1.1 - the release workflow
+# would have caught it at tag time, which is later than anyone wants to find out.
+VERSION       := $(shell grep -m1 '^version = ' pyproject.toml | cut -d '"' -f2)
 
 # Directories that hold first-party source, tests, and shell scripts.
 SRC_DIRS     := nse
