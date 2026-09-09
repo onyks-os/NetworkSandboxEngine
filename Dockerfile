@@ -13,7 +13,10 @@
 # version. That matters: the trace parser has broken across nftables releases
 # before, so "which nft" is part of the test environment, not an accident of the
 # host.
-FROM python:3.12-slim
+# Pinned by digest, not by tag: a tag is mutable, so `python:3.12-slim` is a
+# different image tomorrow and the nftables version this image exists to pin
+# would drift with it. Bump deliberately.
+FROM docker.io/library/python:3.12-slim@sha256:2fe5997d249a808b8eeea52c58a1dbffbba28754dc11699ef5c029f2d818ce79
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         nftables \

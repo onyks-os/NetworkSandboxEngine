@@ -45,6 +45,10 @@ def run_tcp_server(host: str, port: int) -> None:
                             break
                         c.sendall(data)
                 except OSError:
+                    # The client hung up, reset the connection, or timed out.
+                    # None of that is this listener's problem: it exists only to
+                    # give injected packets something to arrive at, so a dead
+                    # peer is an ordinary end of conversation, not an error.
                     pass
                 finally:
                     c.close()
