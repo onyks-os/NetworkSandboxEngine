@@ -31,10 +31,15 @@ docs-serve: ## Serve the documentation with live reload on :8000
 
 docs-sync: ## Mirror the root CHANGELOG into the documentation site
 	@echo "==> [$(PROJECT_SHORT)] Syncing CHANGELOG into the docs site..."
+	@# `0,/re/` rather than `1,/re/`: with `1,`, sed starts looking for the end
+	@# pattern on line *two*, so a CHANGELOG whose first line is already
+	@# "# Changelog" never matches and the whole file is deleted. `0,` may match
+	@# on line one. TTP's changelog opens with a licence comment and so was
+	@# unaffected; NSE's was emptied silently.
 	@{ \
 		echo "# Release Notes & Changelog"; \
 		echo ""; \
-		sed -e '1,/^# Changelog$$/d' CHANGELOG.md; \
+		sed -e '0,/^# Changelog$$/d' CHANGELOG.md; \
 	} | cat -s > docs/web/release-notes/changelog.md
 
 adr: ## Scaffold a new ADR — make adr TITLE="Short decision title"
