@@ -13,7 +13,7 @@ SPDX-License-Identifier: MIT
   <img src="https://img.shields.io/badge/OS-Linux-blue?style=for-the-badge&logo=linux" alt="Linux">
   <img src="https://img.shields.io/badge/Python-3.10+-yellow?style=for-the-badge&logo=python" alt="Python">
   <a href="https://github.com/onyks-os/NetworkSandboxEngine/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/onyks-os/NetworkSandboxEngine/ci.yml?style=for-the-badge&logo=github" alt="CI Status"></a>
-  <a href="https://onyks-os.github.io/NetworkSandboxEngine/"><img src="https://img.shields.io/badge/docs-mkdocs-526CFE?style=for-the-badge&logo=materialformkdocs&logoColor=white" alt="Documentation"></a>
+  <a href="https://onyks-os.github.io/nse/"><img src="https://img.shields.io/badge/docs-mkdocs-526CFE?style=for-the-badge&logo=materialformkdocs&logoColor=white" alt="Documentation"></a>
   <a href="https://pypi.org/project/network-sandbox-engine/"><img src="https://img.shields.io/pypi/v/network-sandbox-engine?style=for-the-badge&logo=pypi" alt="PyPI"></a>
   <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License">
 </p>
@@ -306,7 +306,7 @@ See [docs/RELEASING.md](docs/RELEASING.md).
 ## Documentation
 
 Full interactive web documentation is available at:  
-[https://onyks-os.github.io/NetworkSandboxEngine/](https://onyks-os.github.io/NetworkSandboxEngine/)
+[https://onyks-os.github.io/nse/](https://onyks-os.github.io/nse/)
 
 Build the documentation locally:
 

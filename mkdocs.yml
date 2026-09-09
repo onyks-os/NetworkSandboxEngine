@@ -1,8 +1,8 @@
 site_name: Network Sandbox Engine (NSE)
-site_url: https://onyks-os.github.io/NetworkSandboxEngine/
+site_url: https://onyks-os.github.io/nse/
 site_description: Documentation for Network Sandbox Engine (NSE) - isolated Linux network namespace testing and kernel nftables trace evaluation.
 site_author: onyks-os
-site_dir: ../onyks-os.github.io/NetworkSandboxEngine
+site_dir: ../onyks-os.github.io/nse
 docs_dir: docs/web
 repo_url: https://github.com/onyks-os/NetworkSandboxEngine
 repo_name: onyks-os/NetworkSandboxEngine
