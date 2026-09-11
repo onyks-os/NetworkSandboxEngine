@@ -6,6 +6,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Thi
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **`publish-docs.yml`** — the documentation site is rebuilt and pushed to
+  `onyks-os.github.io/nse` when a release is published, from the released tag.
+  Publication was a manual step: 2.1.1 shipped on 2026-09-09 and the published
+  site still did not mention it two days later.
+
+---
+
 ## [2.1.1] - 2026-09-10
 
 Security: the engine no longer resolves a root-executed binary through `$PATH`.
