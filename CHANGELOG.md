@@ -15,6 +15,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Thi
   Publication was a manual step: 2.1.1 shipped on 2026-09-09 and the published
   site still did not mention it two days later.
 
+### Fixed
+
+- **The `S607` migration guard was linting a package that does not exist here.**
+  It ran `ruff check --select S607 ttp/` — TTP's package name, copied across with
+  the test. `ruff check` on a missing path warns on stderr, then prints "All
+  checks passed!" and exits 0, so the guard reported success while reading no
+  source at all. It now lints `nse/`, asserts the directory exists, and treats a
+  lint that could not open its target as a failure.
+- **The guard has a positive control.** "All checks passed!" is worth nothing
+  unless the rule would have said otherwise, so a file with a bare-binary call is
+  fed to ruff and `S607` must be reported.
+- **CI could not find ruff.** The test invoked a bare `ruff`, which resolves
+  through `$PATH`; `make setup` installs it into the virtualenv, which CI does not
+  put on `$PATH`. A missing bare name raises `FileNotFoundError` rather than
+  returning 127, so the "ruff is not available" skip never ran and all four unit
+  jobs errored. Ruff is now invoked as `sys.executable -m ruff`.
+
 ---
 
 ## [2.1.1] - 2026-09-10

@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 import stat
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -249,22 +250,91 @@ def test_a_missing_binary_is_also_a_file_not_found_error() -> None:
         resolve("definitely-not-a-real-binary")
 
 
+def _ruff(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
+    """
+    Run the ruff that belongs to the interpreter running these tests.
+
+    A bare `"ruff"` argv resolves through $PATH, and `make setup` installs ruff
+    into the project virtualenv, which CI never puts on $PATH - so the guard
+    below raised FileNotFoundError on every runner while passing on a developer
+    machine that happened to have ruff installed globally.
+    """
+    return subprocess.run(
+        [sys.executable, "-m", "ruff", *args],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _skip_without_ruff(result: subprocess.CompletedProcess[str]) -> None:
+    if "No module named ruff" in result.stderr:  # pragma: no cover - ruff installed
+        pytest.skip("ruff is not installed in this environment")
+
+
 def test_no_source_file_still_invokes_a_bare_binary() -> None:
     """
     The migration guard. `ruff --select S607` is the real check and it runs in
     `make lint`; this asserts it stays selected, because a rule silently dropped
     from the config is how 47 call sites came back.
+
+    Two ways this passed without checking anything, both fixed here:
+
+    - It linted `ttp/`, a package that belongs to a different repository. `ruff
+      check` on a path that does not exist warns on stderr, prints "All checks
+      passed!" and exits 0 - so the guard reported success while reading no
+      source at all. The directory is now asserted to exist, and a lint that
+      failed to open its target is a failure rather than a pass.
+    - It invoked a bare `"ruff"` and guarded on `returncode == 127`, a shell
+      convention `subprocess.run` never produces without a shell. ruff lives in
+      the project virtualenv, which CI does not put on $PATH, so the call raised
+      FileNotFoundError, the skip never ran, and the job went red. `_ruff` now
+      runs the ruff belonging to this interpreter.
     """
-    result = subprocess.run(
-        ["ruff", "check", "--select", "S607", "ttp/", "--output-format", "concise"],
-        cwd=Path(__file__).resolve().parent.parent,
-        capture_output=True,
-        text=True,
-        check=False,
+    package = Path(__file__).resolve().parent.parent / "nse"
+    assert package.is_dir(), f"{package} does not exist, so this guard would lint nothing"
+
+    result = _ruff(
+        "check", "--select", "S607", package.name, "--output-format", "concise", cwd=package.parent
     )
-    if result.returncode == 127:  # pragma: no cover - ruff not installed
-        pytest.skip("ruff is not available")
+    _skip_without_ruff(result)
+
+    assert "Failed to lint" not in result.stderr, result.stderr
     assert result.returncode == 0, result.stdout
+
+
+def test_the_s607_guard_would_report_a_bare_binary(tmp_path: Path) -> None:
+    """
+    The positive control for the guard above.
+
+    "All checks passed!" means nothing unless the rule would have said otherwise,
+    and the rule can stop firing without anyone noticing: dropped from `select`,
+    silenced by a broadened `ignore`, or renamed upstream. This feeds ruff a call
+    site of exactly the shape the migration removed and asserts it is reported.
+    """
+    offender = tmp_path / "offender.py"
+    offender.write_text("import subprocess\n\nsubprocess.run(['ip', 'link'], check=False)\n")
+
+    # --isolated so the repository's own ruff configuration cannot decide the
+    # outcome of its own positive control.
+    result = _ruff(
+        "check",
+        "--select",
+        "S607",
+        "--isolated",
+        "--no-cache",
+        offender.name,
+        "--output-format",
+        "concise",
+        cwd=tmp_path,
+    )
+    _skip_without_ruff(result)
+
+    assert "S607" in result.stdout, (
+        f"S607 did not fire on a bare-binary call, so the guard above cannot fail: "
+        f"{result.stdout!r} {result.stderr!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
