@@ -10,10 +10,57 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Thi
 
 ### Added
 
+- **`PCAPAsserter(..., replace_default_filter=True)`** — a caller-supplied
+  `filter` was previously ANDed with the default, which made the default a
+  ceiling rather than a starting point: no consumer could widen the capture back
+  out to see a packet the default excluded. Combining stays the default
+  behaviour; replacing is the escape hatch.
+
+- **Behavioural tests for the default filter.** The existing tests asserted on
+  the filter *string*; the defect was not a typo in the string but the string
+  meaning more than its author intended. The new tests compile it with libpcap
+  and replay packets through it from a pcap file — no interface and no
+  privileges — asserting that a global-destination ICMPv6 echo now survives,
+  that ND and ARP still do not, and that ordinary WAN traffic does. Both ends of
+  the suppressed type range are pinned: widening it in either direction
+  re-creates the original defect, and a first version of these tests did not
+  catch that.
+
 - **`publish-docs.yml`** — the documentation site is rebuilt and pushed to
   `onyks-os.github.io/nse` when a release is published, from the released tag.
   Publication was a manual step: 2.1.1 shipped on 2026-09-09 and the published
   site still did not mention it two days later.
+
+### Fixed
+
+- **`PCAPAsserter`'s default filter no longer discards routable ICMPv6.** It read
+  `not arp and not icmp6`, which is broader than the noise its own comment
+  described. ICMPv6 is not only Neighbour Discovery: the expression also excluded
+  echo request/reply to a **globally routable** address — cleartext traffic
+  leaving the host, which is exactly what a class documented as "asserting that
+  no traffic leaks outside sandbox boundaries" exists to catch. Because the
+  filter is compiled into BPF and evaluated in the kernel, those packets never
+  reached userspace, so no consumer could see them or compensate downstream.
+  Narrowed to ICMPv6 types 133-137, the Router Solicitation / Advertisement /
+  Neighbour Solicitation / Advertisement / Redirect set the comment always
+  claimed — all link-local, all discarded by the first router, none able to
+  reach a remote observer. See
+  [#14](https://github.com/onyks-os/NetworkSandboxEngine/issues/14).
+
+- **The `S607` migration guard was linting a package that does not exist here.**
+  It ran `ruff check --select S607 ttp/` — TTP's package name, copied across with
+  the test. `ruff check` on a missing path warns on stderr, then prints "All
+  checks passed!" and exits 0, so the guard reported success while reading no
+  source at all. It now lints `nse/`, asserts the directory exists, and treats a
+  lint that could not open its target as a failure.
+- **The guard has a positive control.** "All checks passed!" is worth nothing
+  unless the rule would have said otherwise, so a file with a bare-binary call is
+  fed to ruff and `S607` must be reported.
+- **CI could not find ruff.** The test invoked a bare `ruff`, which resolves
+  through `$PATH`; `make setup` installs it into the virtualenv, which CI does not
+  put on `$PATH`. A missing bare name raises `FileNotFoundError` rather than
+  returning 127, so the "ruff is not available" skip never ran and all four unit
+  jobs errored. Ruff is now invoked as `sys.executable -m ruff`.
 
 ---
 

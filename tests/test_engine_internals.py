@@ -668,19 +668,141 @@ def test_injector_wraps_scapy_failures() -> None:
 
 
 def test_pcap_asserter_combines_filters() -> None:
-    from nse.core.sniffer import PCAPAsserter
+    from nse.core.sniffer import DEFAULT_FILTER, PCAPAsserter
 
     with patch("scapy.all.AsyncSniffer"):
         asserter = PCAPAsserter(iface="veth0", filter="port 53")
-    assert asserter.filter == "(not arp and not icmp6) and (port 53)"
+    assert asserter.filter == f"({DEFAULT_FILTER}) and (port 53)"
 
 
 def test_pcap_asserter_default_filter() -> None:
-    from nse.core.sniffer import PCAPAsserter
+    from nse.core.sniffer import DEFAULT_FILTER, PCAPAsserter
 
     with patch("scapy.all.AsyncSniffer"):
         asserter = PCAPAsserter(iface="veth0")
-    assert asserter.filter == "not arp and not icmp6"
+    assert asserter.filter == DEFAULT_FILTER
+
+
+def test_pcap_asserter_can_replace_the_default_filter() -> None:
+    """The default is compiled into BPF and evaluated in the kernel, so a packet
+    it excludes never reaches userspace. A caller that needs to assert on
+    suppressed traffic has to be able to opt out, not merely add to it."""
+    from nse.core.sniffer import PCAPAsserter
+
+    with patch("scapy.all.AsyncSniffer"):
+        asserter = PCAPAsserter(iface="veth0", filter="icmp6", replace_default_filter=True)
+    assert asserter.filter == "icmp6"
+
+
+def test_replacing_the_default_without_a_filter_still_yields_the_default() -> None:
+    """`replace_default_filter=True` with nothing to replace it with must not
+    produce an empty filter, which libpcap reads as "capture everything"."""
+    from nse.core.sniffer import DEFAULT_FILTER, PCAPAsserter
+
+    with patch("scapy.all.AsyncSniffer"):
+        asserter = PCAPAsserter(iface="veth0", replace_default_filter=True)
+    assert asserter.filter == DEFAULT_FILTER
+
+
+# ---------------------------------------------------------------------------
+# What the default filter actually lets through
+# ---------------------------------------------------------------------------
+#
+# The tests above assert on the filter *string*. These assert on its *effect*,
+# by compiling it with libpcap and replaying packets through it from a pcap
+# file - which needs no privileges and no interface. That distinction matters
+# here: the bug this filter had was not a typo in the string, it was the string
+# meaning more than its author intended.
+
+
+def _survives_default_filter(packet: object) -> bool:
+    """True if *packet* would reach userspace through the default filter."""
+    import tempfile
+
+    from scapy.all import sniff, wrpcap
+
+    from nse.core.sniffer import DEFAULT_FILTER
+
+    with tempfile.NamedTemporaryFile(suffix=".pcap") as handle:
+        wrpcap(handle.name, [packet])
+        return len(sniff(offline=handle.name, filter=DEFAULT_FILTER)) > 0
+
+
+def test_the_default_filter_compiles() -> None:
+    """A malformed BPF expression changes what is captured with no error at all,
+    which is the same class of failure as the one being fixed."""
+    from scapy.arch.common import compile_filter
+
+    from nse.core.sniffer import DEFAULT_FILTER
+
+    compile_filter(DEFAULT_FILTER, linktype=1)  # DLT_EN10MB; raises on a bad expression
+
+
+def test_an_icmpv6_echo_to_a_global_address_is_captured() -> None:
+    """The regression. `not icmp6` discarded this - a routable cleartext packet
+    leaving the host, which is exactly what a leak assertion must see."""
+    from scapy.all import Ether, IPv6
+    from scapy.layers.inet6 import ICMPv6EchoRequest
+
+    packet = Ether() / IPv6(dst="2001:4860:4860::8888") / ICMPv6EchoRequest()
+    assert _survives_default_filter(packet) is True
+
+
+@pytest.mark.parametrize(
+    ("icmp6_type", "name"),
+    [
+        pytest.param(128, "echo request", id="128-echo-request"),
+        pytest.param(129, "echo reply", id="129-echo-reply"),
+        pytest.param(132, "just below the ND range", id="132-lower-boundary"),
+        pytest.param(138, "just above the ND range", id="138-upper-boundary"),
+        pytest.param(139, "node information query", id="139-node-info-query"),
+    ],
+)
+def test_routable_icmpv6_types_outside_the_nd_range_are_captured(
+    icmp6_type: int, name: str
+) -> None:
+    """Both ends of the suppressed range are pinned, not just the middle.
+
+    Widening the range in either direction re-creates the original defect for
+    whatever it swallows, and the ND-specific tests below would not notice:
+    they only prove the types inside the range stay out.
+    """
+    from scapy.all import Ether, IPv6, raw
+    from scapy.layers.inet6 import ICMPv6Unknown
+
+    packet = Ether() / IPv6(dst="2001:4860:4860::8888") / ICMPv6Unknown(type=icmp6_type)
+    assert raw(packet)  # the packet is well-formed before we ask about the filter
+    assert _survives_default_filter(packet) is True, name
+
+
+@pytest.mark.parametrize(
+    ("name", "layer_name"),
+    [
+        ("router advertisement", "ICMPv6ND_RA"),
+        ("neighbour solicitation", "ICMPv6ND_NS"),
+        ("neighbour advertisement", "ICMPv6ND_NA"),
+    ],
+)
+def test_neighbour_discovery_is_still_suppressed(name: str, layer_name: str) -> None:
+    """The noise the filter was always meant to drop keeps being dropped."""
+    import scapy.layers.inet6 as inet6
+    from scapy.all import Ether, IPv6
+
+    packet = Ether() / IPv6(dst="ff02::1") / getattr(inet6, layer_name)()
+    assert _survives_default_filter(packet) is False, name
+
+
+def test_arp_is_still_suppressed() -> None:
+    from scapy.all import ARP, Ether
+
+    assert _survives_default_filter(Ether() / ARP()) is False
+
+
+def test_ordinary_wan_traffic_is_captured() -> None:
+    """The control: a filter that drops everything would pass every test above."""
+    from scapy.all import IP, TCP, Ether
+
+    assert _survives_default_filter(Ether() / IP(dst="1.2.3.4") / TCP(dport=443)) is True
 
 
 # ---------------------------------------------------------------------------
