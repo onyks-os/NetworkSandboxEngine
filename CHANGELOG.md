@@ -8,6 +8,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Thi
 
 ## [Unreleased]
 
+---
+
+## [2.1.2] - 2026-09-22
+
+The default capture filter no longer hides routable ICMPv6 from consumers.
+
+This is cut now rather than batched, because the fix is unreachable until it is
+published. TransparentTorProxy has a leak-containment test for routable ICMPv6
+that cannot pass on 2.1.1 — the packet is discarded in the kernel before any
+consumer can classify it — and its investigation lost two CI cycles to the
+assumption that the merged fix was the installed one. A fix that exists only on
+`main` does not protect anyone.
+
 ### Added
 
 - **`PCAPAsserter(..., replace_default_filter=True)`** — a caller-supplied
