@@ -24,7 +24,6 @@ table ip filter {
 }
 """
 
-
 async def main() -> None:
     request = TestRequest(
         rules=RULES,
@@ -43,7 +42,6 @@ async def main() -> None:
     for evt in events:
         if evt.verdict and evt.table != "nse_trace":
             print(f"[{evt.chain}] {evt.verdict}")
-
 
 asyncio.run(main())
 ```
@@ -92,7 +90,6 @@ pytestmark = [
     pytest.mark.asyncio,
     pytest.mark.skipif(os.geteuid() != 0, reason="NSE needs root for netns and kernel tracing"),
 ]
-
 
 async def test_ssh_is_blocked(my_ruleset: str) -> None:
     request = TestRequest(
@@ -143,3 +140,55 @@ matter most for slow machines and CI runners:
 Do **not** work around a failing canary by ignoring the error. A canary that
 never arrives means the engine could not see the kernel; whatever it would have
 reported about your ruleset would have been fiction.
+
+---
+
+## Asserting that nothing left the interface
+
+The trace oracle answers *what did the ruleset decide*. It cannot answer *what
+reached the wire*, which is the question behind a zero-leak claim: a packet that
+matches no rule at all produces no verdict to inspect. `PCAPAsserter` covers
+that half.
+
+```python
+from nse import PCAPAsserter
+
+asserter = PCAPAsserter(iface="veth-host")
+await asserter.start()
+# ... drive the stimulus ...
+leaked = await asserter.stop()
+assert not leaked, f"{len(leaked)} frame(s) escaped: {leaked}"
+```
+
+### Always pair it with a positive control
+
+A sniffer that never attached and a firewall that blocks everything both return
+an empty list. The assertion above distinguishes them only if you have shown,
+in the same run, that the instrument can see the packet you are looking for:
+flush the ruleset, send the same stimulus, and require it to be **captured**
+before you trust the empty capture that follows. Without that, the test passes
+hardest when it is most broken.
+
+### The default filter, and when to replace it
+
+`DEFAULT_FILTER` excludes ARP and ICMPv6 types 133-137 - Neighbour Discovery,
+whose hop limit of 255 means it cannot reach a remote observer. Everything else
+is captured, **including ICMPv6 echo to a globally routable address**.
+
+A `filter` argument is combined with the default. Pass
+`replace_default_filter=True` to use yours alone:
+
+```python
+# Combined: DEFAULT_FILTER and your expression.
+PCAPAsserter(iface="veth-host", filter="ip6")
+
+# Yours alone - you are now responsible for the noise.
+PCAPAsserter(iface="veth-host", filter="ip6", replace_default_filter=True)
+```
+
+The escape hatch exists because the filter is compiled into BPF and evaluated in
+the kernel. A packet it excludes never reaches userspace, so a caller cannot
+compensate downstream by filtering the returned list - there is nothing in it to
+filter. Until 2.1.2 the default read `not arp and not icmp6` and silently
+discarded routable ICMPv6 for exactly that reason; see
+[issue #14](https://github.com/onyks-os/NetworkSandboxEngine/issues/14).

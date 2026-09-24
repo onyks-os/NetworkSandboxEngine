@@ -3,9 +3,15 @@ Copyright (c) 2026 onyks-os
 SPDX-License-Identifier: MIT
 -->
 
-<h1 align="center">
+<p align="center">
+  <img src="https://raw.githubusercontent.com/onyks-os/NetworkSandboxEngine/main/assets/logo.svg" alt="Network Sandbox Engine" width="720">
+</p>
+
+<!-- --- -->
+
+<!-- <h1 align="center">
   Network Sandbox Engine (NSE)
-</h1>
+</h1> -->
 
 <h4 align="center">A Linux engine for deterministic <b>nftables firewall testing</b> inside isolated network namespaces.</h4>
 
@@ -20,6 +26,8 @@ SPDX-License-Identifier: MIT
 
 <p align="center">
   <a href="#why-nse">Why NSE?</a> •
+  <a href="#the-oracle-contract">Oracle contract</a> •
+  <a href="#asserting-on-the-wire">Wire assertions</a> •
   <a href="#features">Features</a> •
   <a href="#requirements">Requirements</a> •
   <a href="#installation">Installation</a> •
@@ -27,14 +35,6 @@ SPDX-License-Identifier: MIT
   <a href="#how-it-works">How It Works</a> •
   <a href="#project-structure">Project Structure</a>
 </p>
-
----
-
-<p align="center">
-  <img src="assets/preview.png" alt="Network Sandbox Engine Interface" width="800">
-</p>
-
----
 
 ## Why NSE?
 
@@ -47,7 +47,7 @@ Key architectural properties:
 * **Zero Host Mutation**: Rulesets are loaded exclusively into ephemeral sandbox namespaces (`nse_<uuid>`) and are completely removed during teardown.
 * **Self-verifying Oracle**: Every run injects a *canary* packet before the test packets and again after them, and reports a result only if the kernel trace for both was observed. See [The oracle contract](#the-oracle-contract).
 * **Dual-Stack and Topologies**: Native support for IPv4 and IPv6 traffic, plus multi-namespace Gateway topologies for router, NAT, and forwarding ruleset validation.
-* **Small, auditable surface**: One package, no web server, no JavaScript. `nse/` is ~1150 statements at 98% test coverage.
+* **Small, auditable surface**: One package, no web server, no JavaScript. `nse/` is ~1200 statements at 98% test coverage.
 
 ### Requires root
 
@@ -89,6 +89,42 @@ non-zero. That job runs in CI on every push.
 
 ---
 
+## Asserting on the wire
+
+`nft monitor trace` reports what the ruleset *decided*. It cannot report what
+left an interface the ruleset never matched on, which is the question a
+zero-leak claim actually asks. `PCAPAsserter` covers that: an `AsyncSniffer`
+wrapper that captures on a named interface and hands the frames back, so a test
+can assert that a stimulus produced **none**.
+
+```python
+from nse import PCAPAsserter
+
+asserter = PCAPAsserter(iface="veth-host")
+await asserter.start()
+# ... send the stimulus ...
+leaked = await asserter.stop()
+assert not leaked, leaked
+```
+
+The same rule as the trace oracle applies, and it is the caller's to enforce: a
+sniffer that never attached and a firewall that blocked everything both return
+an empty list. Capture the stimulus once with the ruleset flushed and require
+the frame to be *seen* before asserting its absence.
+
+**The default filter suppresses link-local noise, and nothing else.**
+`DEFAULT_FILTER` excludes ARP and ICMPv6 types 133-137 - Neighbour Discovery,
+which carries a hop limit of 255 and cannot reach a remote observer. Everything
+else is captured, including ICMPv6 echo to a globally routable address. A
+`filter` argument is combined with that default; `replace_default_filter=True`
+uses yours alone. The escape hatch exists because the filter is compiled into
+BPF and evaluated in the kernel: a packet it excludes never reaches userspace,
+so no consumer can recover it downstream. Until 2.1.2 the default read `not arp
+and not icmp6`, which discarded routable ICMPv6 as well - see
+[issue #14](https://github.com/onyks-os/NetworkSandboxEngine/issues/14).
+
+---
+
 ## Features
 
 * **In-Process Engine**: Direct Python API (`run_test_pipeline`) returning structured Pydantic models (`TestRequest`, `TraceEvent`).
@@ -96,9 +132,10 @@ non-zero. That job runs in CI on every push.
 * **Isolated Topologies**:
   * **Simple**: Single sandbox namespace (`nse_<id>`) wired directly to the host.
   * **Gateway**: Router (`nse_router_<id>`) and Server (`nse_server_<id>`) chain for forwarding and NAT testing.
+* **Wire-level Leak Assertions**: `PCAPAsserter` captures on a named interface so a test can assert that a stimulus produced no frame at all. See [Asserting on the wire](#asserting-on-the-wire).
 * **Automated Cleanup**: Startup sweeps detect and remove leftover namespaces and veth pairs from previous aborted runs. Teardowns include exponential backoff retries.
 * **CLI YAML Test Runner**: Execute declarative YAML test suites for automated CI/CD pipelines (`nse-runner`). Exits non-zero on a wrong verdict *and* on a verdict it failed to observe.
-* **Strict Quality Standards**: Full static type checking (`mypy --strict`), architectural boundary enforcement (`import-linter`), `ruff` formatting, and a coverage ratchet (`make test-cov`, floor 98%).
+* **Strict Quality Standards**: Full static type checking (`mypy --strict`), architectural boundary enforcement (`import-linter`), `ruff` formatting, and a coverage ratchet (`make coverage`, floor 98%).
 
 ---
 
@@ -330,7 +367,7 @@ Run static linting and unit tests:
 make verify
 ```
 
-Run full local CI verification (includes linting, unit tests, frontend build, docs build, PyPI smoke test, and privileged integration tests):
+Run the full local CI pipeline (lint, type check, import boundaries, unit tests, docs build, and the release artifacts):
 
 ```bash
 make ci-local
