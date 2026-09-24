@@ -1,4 +1,4 @@
-# Network Sandbox Engine (NSE) v2.0.0
+# Network Sandbox Engine (NSE)
 
 **Deterministic Linux network namespace isolation and kernel `nftables` trace evaluation engine.**
 
@@ -46,6 +46,7 @@ graph TD
 
 - **Library and CLI only**: no server, no socket, no daemon. Root privileges are held for the duration of a run and nothing listens.
 - **Self-verifying Oracle**: canary packets before and after every run prove the kernel trace was actually being observed, so a blind engine fails instead of reporting a clean result.
+- **Wire-level Leak Assertions**: `PCAPAsserter` captures on a named interface, so a test can assert a stimulus produced no frame at all - the question `nft monitor trace` cannot answer.
 - **Isolated Topologies**: Supports **Simple** (single sandbox netns) and **Gateway** (router + server netns chain) topologies.
 - **Scapy Packet Injection**: Forge arbitrary TCP, UDP, and ICMP packets across IPv4 and IPv6 protocols.
 - **Robust Netns Lifecycle**: Automated startup sweeps of orphan namespaces and veth pairs with exponential backoff teardowns.

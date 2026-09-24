@@ -49,6 +49,19 @@ Auto-generated Python API documentation powered by `mkdocstrings`.
 
 ---
 
+## Wire Capture (`PCAPAsserter`)
+
+Exported from the package root as `nse.PCAPAsserter`. Note `DEFAULT_FILTER`: it
+suppresses ARP and ICMPv6 Neighbour Discovery only, and it is compiled into BPF,
+so anything it excludes never reaches userspace.
+
+::: nse.core.sniffer
+    options:
+      show_root_heading: true
+      show_source: true
+
+---
+
 ## Data Models
 
 ::: nse.models.test_request

@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Network Sandbox Engine">
+  <title>Network Sandbox Engine</title>
+  <!-- The sandbox: a hard outer boundary, a dashed inner one (the netns). -->
+  <rect x="6" y="6" width="52" height="52" rx="13" fill="none" stroke="#6C63FF" stroke-width="3.5"/>
+  <rect x="15" y="15" width="34" height="34" rx="8" fill="none" stroke="#6C63FF" stroke-width="2"
+        stroke-dasharray="4 4" opacity="0.55"/>
+
+  <!-- ACCEPT: the packet crosses both boundaries and leaves the frame. -->
+  <path d="M0 25 H60" fill="none" stroke="#3DDC97" stroke-width="3.5" stroke-linecap="round"/>
+  <path d="M54 19 L61 25 L54 31" fill="none" stroke="#3DDC97" stroke-width="3.5"
+        stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- DROP: the packet is stopped on the boundary, not somewhere past it. -->
+  <path d="M0 41 H24" fill="none" stroke="#FF5C7A" stroke-width="3.5" stroke-linecap="round"/>
+  <path d="M27 36 L37 46 M37 36 L27 46" fill="none" stroke="#FF5C7A" stroke-width="3.5" stroke-linecap="round"/>
+</svg>

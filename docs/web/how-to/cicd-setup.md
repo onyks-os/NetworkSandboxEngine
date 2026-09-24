@@ -58,8 +58,17 @@ jobs:
 
 ## Local CI Verification (`make ci-local`)
 
-Run the complete 5-job CI pipeline locally before pushing:
+Run the unprivileged part of the pipeline locally before pushing - lint,
+type checks, import boundaries, unit tests, the docs build and the release
+artifacts:
 
 ```bash
 make ci-local
 ```
+
+It is not the whole of CI. Three jobs are deliberately left out because they
+need privileges or the network that a pre-push hook should not assume:
+`integration` (root, real namespaces), `blindness` (`make test-blind`, which
+proves the runner fails when the parser understands nothing) and `smoke-pypi`.
+Run `sudo make integration-test` and `make test-blind` when you have touched
+the harvester, the oracle or the CLI exit codes.

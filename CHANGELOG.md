@@ -8,6 +8,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Thi
 
 ## [Unreleased]
 
+### Documentation
+
+- **The README no longer opens with a screenshot of the web interface this
+  project removed.** `assets/preview.png` showed the FastAPI/Svelte GUI archived
+  in 2.1.0, directly above the paragraph explaining that it was gone. Replaced
+  with an SVG mark that renders on both GitHub themes, and referenced by its raw
+  URL so it also renders on PyPI, where a repository-relative path does not
+  resolve.
+- **`PCAPAsserter` is documented.** It is half of `nse.__all__` and appeared in
+  no README section, no API reference page and no how-to. Added to all three,
+  together with the rule its consumers actually need: an empty capture proves
+  nothing without a positive control, and `DEFAULT_FILTER` is compiled into BPF,
+  so what it excludes cannot be recovered downstream.
+- **Corrected commands that do not exist.** The coverage ratchet is `make
+  coverage`, not `make test-cov`; `make ci-local` builds no frontend and is not
+  "the complete 5-job CI pipeline" — it omits `integration`, `blindness` and
+  `smoke-pypi`, all of which need root or the network.
+- The documentation homepage announced v2.0.0. The version was removed rather
+  than bumped: nothing kept it honest.
+
 ---
 
 ## [2.1.2] - 2026-09-22

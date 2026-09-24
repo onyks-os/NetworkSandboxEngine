@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 150" width="720" height="150" role="img" aria-label="Network Sandbox Engine - deterministic nftables testing in ephemeral netns">
+  <title>Network Sandbox Engine</title>
+  <g transform="translate(24,33) scale(1.32)">
+    <rect x="6" y="6" width="52" height="52" rx="13" fill="none" stroke="#6C63FF" stroke-width="3.5"/>
+    <rect x="15" y="15" width="34" height="34" rx="8" fill="none" stroke="#6C63FF" stroke-width="2"
+          stroke-dasharray="4 4" opacity="0.55"/>
+    <path d="M0 25 H60" fill="none" stroke="#3DDC97" stroke-width="3.5" stroke-linecap="round"/>
+    <path d="M54 19 L61 25 L54 31" fill="none" stroke="#3DDC97" stroke-width="3.5"
+          stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M0 41 H24" fill="none" stroke="#FF5C7A" stroke-width="3.5" stroke-linecap="round"/>
+    <path d="M27 36 L37 46 M37 36 L27 46" fill="none" stroke="#FF5C7A" stroke-width="3.5" stroke-linecap="round"/>
+  </g>
+  <g font-family="'DejaVu Sans','Segoe UI',Helvetica,Arial,sans-serif">
+    <text x="140" y="70" font-size="38" font-weight="700" fill="#6C63FF">Network Sandbox Engine</text>
+    <text x="142" y="100" font-size="17" fill="#8A94A6">deterministic nftables testing in ephemeral netns</text>
+  </g>
+</svg>

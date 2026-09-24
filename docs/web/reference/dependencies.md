@@ -30,7 +30,7 @@ no ASGI server and no JavaScript toolchain: the web interface was archived in
 | Package | Purpose |
 | :--- | :--- |
 | `pytest`, `pytest-asyncio` | Unit & integration test runners |
-| `pytest-cov` | Coverage measurement and the `make test-cov` ratchet |
+| `pytest-cov` | Coverage measurement and the `make coverage` ratchet |
 | `ruff` | Formatting & static analysis |
 | `mypy` | Strict static type checking |
 | `import-linter` | Architectural boundary enforcement |
