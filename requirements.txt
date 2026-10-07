@@ -10,7 +10,7 @@ pydantic==2.13.4
     # via network-sandbox-engine (pyproject.toml)
 pydantic-core==2.49.0
     # via pydantic
-scapy==2.7.0
+scapy==2.8.0
     # via network-sandbox-engine (pyproject.toml)
 typing-extensions==4.16.0
     # via
