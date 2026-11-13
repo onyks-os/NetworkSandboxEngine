@@ -37,6 +37,6 @@ def derive_names(test_id: str) -> NamespaceNames:
     )
 
 
-# Prefixes used by the startup cleanup sweep
+# Prefixes used for diagnostic inventory, never as proof of ownership.
 NETNS_SWEEP_PREFIXES = ("nse_", "nsr_", "nss_")
 VETH_SWEEP_PREFIXES = ("vhr-", "vrh-", "vrs-", "vsr-")

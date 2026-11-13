@@ -38,7 +38,7 @@ IS_ROOT = os.geteuid() == 0
 
 
 @patch("nse.core.netns_controller._run")
-def test_netns_lifecycle(mock_run: MagicMock) -> None:
+def test_netns_lifecycle(mock_run: MagicMock, resource_kernel: None) -> None:
     controller = NetnsController()
 
     controller.create_netns("nse_test")
@@ -51,22 +51,23 @@ def test_netns_lifecycle(mock_run: MagicMock) -> None:
 
 
 @patch("nse.core.netns_controller._run")
-def test_create_veth_pair(mock_run: MagicMock) -> None:
+def test_create_veth_pair(mock_run: MagicMock, resource_kernel: None) -> None:
     controller = NetnsController()
     controller.create_veth_pair("nse_test", "veth-host", "veth-nse", "10.0.0.1/24", "10.0.0.2/24")
 
     calls = [c[0][0] for c in mock_run.call_args_list]
-    assert [
-        resolve("ip"),
-        "link",
-        "add",
-        "veth-host",
-        "type",
-        "veth",
-        "peer",
-        "name",
-        "veth-nse",
-    ] in calls
+    creation = next(command for command in calls if command[1:3] == ["link", "add"])
+    assert creation[:4] == [resolve("ip"), "link", "add", "veth-host"]
+    assert creation[6:11] == ["type", "veth", "peer", "name", "veth-nse"]
+    assert creation[4] == creation[11] == "address"
+    assert creation[5] != creation[12]
+    for interface in ("veth-host", "veth-nse"):
+        alias = next(
+            command
+            for command in calls
+            if command[1:6] == ["link", "set", "dev", interface, "alias"]
+        )
+        assert alias[-1].startswith("nse:")
     assert [resolve("ip"), "link", "set", "veth-nse", "netns", "nse_test"] in calls
     assert [resolve("ip"), "addr", "add", "10.0.0.1/24", "dev", "veth-host"] in calls
     assert [resolve("ip"), "link", "set", "veth-host", "up"] in calls
@@ -308,7 +309,7 @@ def test_trace_event_serialisation() -> None:
 
 
 @patch("nse.core.netns_controller._run")
-def test_create_gateway_topology(mock_run: MagicMock) -> None:
+def test_create_gateway_topology(mock_run: MagicMock, resource_kernel: None) -> None:
     controller = NetnsController()
     controller.create_gateway_topology(
         router_ns="nse_router_t1",

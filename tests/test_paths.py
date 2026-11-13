@@ -342,7 +342,9 @@ def test_the_s607_guard_would_report_a_bare_binary(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_the_engine_really_invokes_the_trusted_binary(tmp_path: Path, monkeypatch) -> None:
+def test_the_engine_really_invokes_the_trusted_binary(
+    tmp_path: Path, monkeypatch, resource_kernel: None
+) -> None:
     """
     End to end: with a hostile `ip` first on $PATH, the argv the controller hands
     to subprocess still names the trusted absolute path.

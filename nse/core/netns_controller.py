@@ -14,12 +14,14 @@ import contextlib
 import logging
 import subprocess
 import time
+import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 
-from nse.core.naming import NETNS_SWEEP_PREFIXES, VETH_SWEEP_PREFIXES
 from nse.core.paths import resolve
+from nse.core.resource_network import NetworkResources
+from nse.core.resource_registry import Journal, OwnershipError, Resource, ResourceRegistry
 from nse.core.utils import is_in_container
 
 if TYPE_CHECKING:
@@ -125,55 +127,169 @@ class NetnsController:
             self.use_nsenter = is_in_container()
         else:
             self.use_nsenter = use_nsenter
+        self._registry = ResourceRegistry()
+        self._resources = NetworkResources(self.use_nsenter)
+        self._runs: dict[str, str] = {}
         self.startup_sweep()
 
     def startup_sweep(self) -> None:
-        """Clean up orphan namespaces and veth pairs left behind by previous crashes."""
+        """Recover verified abandoned ownership journals; preserve unmarked resources."""
         try:
-            res = subprocess.run(
-                [resolve("ip"), "netns", "list"],
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=5.0,
-            )
-            if res.returncode == 0:
-                for line in res.stdout.splitlines():
-                    ns_name = line.split()[0] if line.split() else ""
-                    if ns_name.startswith(NETNS_SWEEP_PREFIXES):
-                        logger.info("Startup sweep: removing orphan netns %s", ns_name)
-                        subprocess.run(
-                            [resolve("ip"), "netns", "del", ns_name],
-                            capture_output=True,
-                            check=False,
-                            timeout=5.0,
-                        )
-        except Exception as exc:
-            logger.debug("Startup sweep netns list failed: %s", exc)
+            self._registry.recover(self._cleanup_resources)
+            for name in self._resources.unmarked():
+                logger.warning(
+                    "Unmarked NSE resource %s left untouched; ownership is unknown", name
+                )
+        except (OSError, ValueError, OwnershipError, subprocess.SubprocessError) as exc:
+            logger.warning("NSE startup recovery incomplete; resources preserved: %s", exc)
 
+    def _cleanup_resources(self, journal: Journal, namespace: str | None = None) -> None:
+        # Delete links before namespace names: a process may keep an unnamed
+        # namespace alive. Routes attached to a deleted link disappear with it.
+        links = [
+            entry
+            for entry in journal.data.resources
+            if entry.kind == "link"
+            and (namespace is None or namespace in (entry.netns, entry.peer_netns))
+        ]
+        for entry in links:
+            self._remove_resource(journal, entry)
+        namespaces = [
+            entry
+            for entry in journal.data.resources
+            if entry.kind == "namespace" and (namespace is None or entry.name == namespace)
+        ]
+        for entry in namespaces:
+            if any(
+                link.kind == "link" and entry.name in (link.netns, link.peer_netns)
+                for link in journal.data.resources
+            ):
+                logger.warning("Preserving namespace %s with unresolved links", entry.name)
+                continue
+            if (
+                self._remove_resource(journal, entry)
+                and journal.data.owner_id == self._registry.owner_id
+            ):
+                self._active_ns.discard(entry.name)
+                self._runs.pop(entry.name, None)
+
+    def _remove_resource(self, journal: Journal, entry: Resource) -> bool:
         try:
-            res = subprocess.run(
-                [resolve("ip"), "link", "show"],
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=5.0,
+            observation = self._resources.inspect(entry, journal.marker(entry))
+            if observation.status == "foreign":
+                logger.warning(
+                    "Preserving %s %s: ownership marker or identity differs", entry.kind, entry.name
+                )
+                return False
+            if observation.status == "owned":
+                if entry.kind == "namespace":
+                    if not self._delete_namespace(entry.name):
+                        return False
+                else:
+                    _run(
+                        [
+                            *self._resources.prefix(observation.netns),
+                            resolve("ip"),
+                            "link",
+                            "del",
+                            observation.name,
+                        ]
+                    )
+            journal.discard(entry)
+            return True
+        except (OSError, ValueError, OwnershipError, subprocess.SubprocessError) as exc:
+            logger.warning("Preserving unresolved %s %s: %s", entry.kind, entry.name, exc)
+            return False
+
+    def _cleanup_link(self, name: str) -> None:
+        if self._registry.data is None:
+            return
+        with self._registry.edit() as journal:
+            for entry in list(journal.data.resources):
+                if entry.kind == "link" and name in (entry.name, entry.peer):
+                    self._remove_resource(journal, entry)
+
+    def _create_owned_pair(
+        self, first: str, peer: str, peer_netns: str, first_netns: str | None = None
+    ) -> None:
+        with self._registry.edit() as journal:
+            first_identity = self._resources.identity(first_netns)
+            peer_identity = self._resources.identity(peer_netns)
+            if first_identity is None or peer_identity is None:
+                raise OwnershipError("cannot identify the namespaces owning the veth endpoints")
+            entry = journal.add(
+                Resource(
+                    kind="link",
+                    name=first,
+                    peer=peer,
+                    run_id=self._runs.setdefault(peer_netns, uuid.uuid4().hex),
+                    netns=first_netns,
+                    netns_identity=first_identity,
+                    peer_netns=peer_netns,
+                    peer_identity=peer_identity,
+                )
             )
-            if res.returncode == 0:
-                for line in res.stdout.splitlines():
-                    parts = line.split(":")
-                    if len(parts) >= 2:
-                        iface = parts[1].strip().split("@")[0]
-                        if iface.startswith(VETH_SWEEP_PREFIXES):
-                            logger.info("Startup sweep: removing orphan veth link %s", iface)
-                            subprocess.run(
-                                [resolve("ip"), "link", "del", iface],
-                                capture_output=True,
-                                check=False,
-                                timeout=5.0,
-                            )
-        except Exception as exc:
-            logger.debug("Startup sweep veth list failed: %s", exc)
+            marker = journal.marker(entry)
+            # Some kernels ignore IFLA_IFALIAS during veth creation. The two MACs
+            # are atomic creation attributes; a pending intent can be recovered
+            # only if BOTH addresses and their peer relationship still match.
+            first_mac, peer_mac = entry.mac_addresses()
+            _run(
+                [
+                    *self._resources.prefix(first_netns),
+                    resolve("ip"),
+                    "link",
+                    "add",
+                    first,
+                    "address",
+                    first_mac,
+                    "type",
+                    "veth",
+                    "peer",
+                    "name",
+                    peer,
+                    "address",
+                    peer_mac,
+                ]
+            )
+            for interface in (first, peer):
+                _run(
+                    [
+                        *self._resources.prefix(first_netns),
+                        resolve("ip"),
+                        "link",
+                        "set",
+                        "dev",
+                        interface,
+                        "alias",
+                        marker,
+                    ]
+                )
+            entry.state = "created"
+            if self._resources.inspect(entry, marker).status != "owned":
+                entry.state = "pending"
+                raise OwnershipError("cannot confirm ownership markers on the new veth pair")
+            journal.save()
+
+    def _create_owned_route(self, command: list[str], interface: str) -> None:
+        with self._registry.edit() as journal:
+            parent = next(
+                entry
+                for entry in journal.data.resources
+                if entry.kind == "link" and entry.name == interface
+            )
+            entry = journal.add(
+                Resource(
+                    kind="route",
+                    name=f"route_{uuid.uuid4().hex}",
+                    run_id=parent.run_id,
+                    parent=parent.token,
+                    route=tuple(command),
+                )
+            )
+            _run(command)
+            entry.state = "created"
+            journal.save()
 
     def exec_prefix(self, name: str) -> list[str]:
         if self.use_nsenter:
@@ -191,8 +307,30 @@ class NetnsController:
     def create_netns(self, name: str) -> None:
         """Create a new network namespace. Raises on failure."""
         logger.debug("Creating netns: %s", name)
-        _run([resolve("ip"), "netns", "add", name])
-        self._active_ns.add(name)
+        with self._registry.edit() as journal:
+            if any(
+                entry.kind == "namespace" and entry.name == name for entry in journal.data.resources
+            ):
+                raise OwnershipError(f"namespace {name} is already registered by this controller")
+            entry = journal.add(
+                Resource(
+                    kind="namespace",
+                    name=name,
+                    run_id=self._runs.setdefault(name, uuid.uuid4().hex),
+                )
+            )
+            _run([resolve("ip"), "netns", "add", name])
+            self._active_ns.add(name)
+            self._run_in_netns(
+                name, [resolve("ip"), "link", "set", "dev", "lo", "alias", journal.marker(entry)]
+            )
+            entry.identity = self._resources.identity(name)
+            if entry.identity is None:
+                raise OwnershipError(f"cannot confirm identity of newly created namespace {name}")
+            if self._resources.inspect(entry, journal.marker(entry)).status != "owned":
+                raise OwnershipError(f"cannot confirm ownership marker of namespace {name}")
+            entry.state = "created"
+            journal.save()
         # Disable DAD inside the netns to speed up IPv6 interface readiness
         try:
             self._run_in_netns(
@@ -215,18 +353,27 @@ class NetnsController:
             logger.warning("Could not set accept_dad sysctls inside netns %s: %s", name, e)
 
     def destroy_netns(self, name: str) -> None:
-        """Delete a network namespace with retry backoff. Idempotent."""
-        logger.debug("Destroying netns: %s", name)
+        """Remove only this controller's verified namespace and associated links."""
+        if self._registry.data is None:
+            logger.warning("Namespace %s is not owned by this controller; left untouched", name)
+            return
+        with self._registry.edit() as journal:
+            if not any(
+                entry.kind == "namespace" and entry.name == name for entry in journal.data.resources
+            ):
+                logger.warning("Namespace %s is not owned by this controller; left untouched", name)
+                return
+            self._cleanup_resources(journal, namespace=name)
+
+    def _delete_namespace(self, name: str) -> bool:
         delays = [0.1, 0.5, 1.0]
         for idx, delay in enumerate(delays):
             try:
                 _run([resolve("ip"), "netns", "del", name])
-                break
+                return True
             except subprocess.CalledProcessError as err:
-                stderr = err.stderr or ""
-                if "No such file or directory" in stderr or "Invalid argument" in stderr:
-                    logger.debug("netns %s already gone.", name)
-                    break
+                if "No such file or directory" in (err.stderr or ""):
+                    return True
                 if idx < len(delays) - 1:
                     time.sleep(delay)
                 else:
@@ -234,7 +381,7 @@ class NetnsController:
             except subprocess.TimeoutExpired:
                 logger.warning("Timeout destroying netns %s", name)
                 break
-        self._active_ns.discard(name)
+        return False
 
     @contextlib.asynccontextmanager
     async def create_namespace(
@@ -267,8 +414,7 @@ class NetnsController:
             yield sandbox
         finally:
             # Cleanup links
-            with contextlib.suppress(subprocess.CalledProcessError, OSError):
-                _run([resolve("ip"), "link", "del", sandbox.ext_iface])
+            self._cleanup_link(sandbox.ext_iface)
 
             # Cleanup netns
             self.destroy_netns(name)
@@ -320,7 +466,7 @@ class NetnsController:
             v6_peer = "fd00::2/64"
 
         # Create veth pair in the root namespace
-        _run([resolve("ip"), "link", "add", veth_host, "type", "veth", "peer", "name", veth_peer])
+        self._create_owned_pair(veth_host, veth_peer, netns_name)
         # Move the peer end into the target namespace
         _run([resolve("ip"), "link", "set", veth_peer, "netns", netns_name])
 
@@ -381,6 +527,10 @@ class NetnsController:
         enable IPv4/IPv6 forwarding inside the router, and add transit routes.
         """
         logger.info("Setting up gateway topology: %s <-> %s", router_ns, server_ns)
+        # Both namespaces belong to the same experiment within this controller.
+        run_id = uuid.uuid4().hex
+        self._runs.setdefault(router_ns, run_id)
+        self._runs.setdefault(server_ns, run_id)
         # Create namespaces
         self.create_netns(router_ns)
         self.create_netns(server_ns)
@@ -397,19 +547,7 @@ class NetnsController:
         )
 
         # 1. Create Host <-> Router veth pair
-        _run(
-            [
-                resolve("ip"),
-                "link",
-                "add",
-                veth_host,
-                "type",
-                "veth",
-                "peer",
-                "name",
-                veth_router_host,
-            ]
-        )
+        self._create_owned_pair(veth_host, veth_router_host, router_ns)
         _run([resolve("ip"), "link", "set", veth_router_host, "netns", router_ns])
 
         _run([resolve("ip"), "addr", "add", host_v4, "dev", veth_host])
@@ -450,20 +588,7 @@ class NetnsController:
         )
 
         # 2. Create Router <-> Server veth pair
-        self._run_in_netns(
-            router_ns,
-            [
-                resolve("ip"),
-                "link",
-                "add",
-                veth_router_server,
-                "type",
-                "veth",
-                "peer",
-                "name",
-                veth_server,
-            ],
-        )
+        self._create_owned_pair(veth_router_server, veth_server, server_ns, router_ns)
         self._run_in_netns(
             router_ns,
             [
@@ -541,8 +666,11 @@ class NetnsController:
         # Route on Host: Server subnet via Router host IP
         host_rt_via = router_host_v4.split("/")[0]
         host_rt_via6 = router_host_v6.split("/")[0]
-        _run([resolve("ip"), "route", "add", "10.0.2.0/24", "via", host_rt_via, "dev", veth_host])
-        _run(
+        self._create_owned_route(
+            [resolve("ip"), "route", "add", "10.0.2.0/24", "via", host_rt_via, "dev", veth_host],
+            veth_host,
+        )
+        self._create_owned_route(
             [
                 resolve("ip"),
                 "-6",
@@ -553,7 +681,8 @@ class NetnsController:
                 host_rt_via6,
                 "dev",
                 veth_host,
-            ]
+            ],
+            veth_host,
         )
 
         # Route on Server: Host subnet via Router server IP (default route is cleanest)
@@ -589,12 +718,13 @@ class NetnsController:
 
     def cleanup_all(self) -> None:
         """
-        Destroy all known namespaces.  Called on SIGINT/SIGTERM.
+        Destroy this controller's verified resources. Called on SIGINT/SIGTERM.
         Safe to call multiple times.
         """
         logger.info("Cleaning up %d namespace(s)…", len(self._active_ns))
-        for name in list(self._active_ns):
-            self.destroy_netns(name)
+        if self._registry.data is not None:
+            with self._registry.edit() as journal:
+                self._cleanup_resources(journal)
 
 
 # ---------------------------------------------------------------------------

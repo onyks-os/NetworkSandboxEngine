@@ -511,15 +511,9 @@ async def run_test_pipeline(
         else:
             await loop.run_in_executor(None, controller.destroy_netns, netns)
 
-        # Explicitly clean up host veth
-        await loop.run_in_executor(
-            None,
-            lambda: subprocess.run(
-                [resolve("ip"), "link", "del", veth_host],
-                capture_output=True,
-                check=False,
-            ),
-        )
+        # Namespace teardown removes only the controller's registered links.
+        # Never delete a prefix/name match directly: a failed setup may have
+        # encountered a resource owned by another experiment.
 
     return _without_canaries(collected_events, canary_trace_ids)
 

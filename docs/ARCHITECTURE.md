@@ -1,4 +1,4 @@
-# Network Sandbox Engine (NSE) - Technical Architecture (v2.1.0)
+# Network Sandbox Engine (NSE) - Technical Architecture
 
 ## 1. System Goal
 
@@ -23,6 +23,8 @@ NetworkSandboxEngine/
 |   |-- core/
 |   |   |-- naming.py           # Uniform netns/veth derive_names() and sweep rules
 |   |   |-- netns_controller.py # Namespace lifecycle, veth wiring, and startup sweep
+|   |   |-- resource_registry.py # Private journals, owner leases and coordinated recovery
+|   |   |-- resource_network.py # Kernel identity and ownership marker verification
 |   |   |-- scapy_injector.py   # L2/L3 packet forging and injection
 |   |   |-- sniffer.py          # PCAPAsserter (AsyncSniffer wrapper)
 |   |   |-- pipeline.py         # run_test_pipeline() orchestrator
@@ -70,8 +72,8 @@ Enforced by `import-linter` contracts in `make lint`:
 
 Manages the full lifecycle of network namespaces.
 
-- `create_netns(name)` / `destroy_netns(name)`: raw `ip netns add` / `del`. `destroy_netns` features a 3-attempt exponential backoff retry.
-- `startup_sweep()`: automatically cleans orphan `nse_*`, `nsr_*`, `nss_*` netns and `vhr-*`, `vrh-*`, `vrs-*`, `vsr-*` veth links on initialization.
+- `create_netns(name)` / `destroy_netns(name)`: namespace creation and verified ownership teardown, with three deletion attempts. An unowned or replaced resource is preserved; failed deletions keep their journal records.
+- `startup_sweep()`: recovers only validated abandoned ownership journals whose owner lock is available. Prefix matches are diagnostic, never authorization to delete. Journals are private, scoped to the current network namespace and coordinated across processes. See [Namespace lifecycle](web/explanation/namespace-lifecycle.md).
 - `create_veth_pair(ns, host_iface, peer_iface, host_ip, peer_ip)`: veth creation, peer assignment into the namespace, IP configuration, and link-up.
 - `create_gateway_topology(...)`: three-namespace setup (Host, Router, Server) with dual-stack IPv4/IPv6, sysctl forwarding, and static routes.
 
@@ -174,5 +176,5 @@ appear in a caller's verdict stream. See
 
 - **Namespace Isolation**: Rulesets are confined to isolated network namespaces identified by per-test UUIDs. `RuleEngine.load()` refuses an empty namespace name, so a missing argument cannot fall through to the host firewall.
 - **No listening surface**: NSE runs as root because `ip netns` and kernel tracing require it, but it opens no socket, port or RPC endpoint. It is invoked, it measures, it exits. The web server that ran in-process as root in 2.0.0 was removed in 2.1.0.
-- **Deterministic teardown**: namespaces and host-side veth interfaces are removed in a `finally` block with retry backoff, and a startup sweep removes anything a previously crashed run left behind.
+- **Owned teardown and recovery**: teardown removes verified owned links before namespace names. Startup recovery acquires an inactive owner's lease and verifies kernel markers/identities before deletion. Uncertain ownership and failed cleanup remain recorded; deleting a namespace name does not terminate processes holding that namespace.
 - **Pre-Validation**: `nft --check` runs before any `load()` call, preventing malformed rulesets from reaching the kernel.
