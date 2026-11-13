@@ -68,6 +68,49 @@ jobs:
     - name: Run unit tests with the coverage ratchet
       run: make coverage
 
+  runtime-compatibility:
+    name: Runtime compatibility (${{ matrix.python-version }}, ${{ matrix.profile }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python-version: '3.10'
+            profile: pinned
+          - python-version: '3.11'
+            profile: pinned
+          - python-version: '3.10'
+            profile: scapy-minimum
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v7
+
+    - name: Set up Python
+      uses: actions/setup-python@v7
+      with:
+        python-version: ${{ matrix.python-version }}
+        cache: 'pip'
+
+    # The ordinary unit job resolves pyproject.toml, so it cannot detect an
+    # incompatible pair of exact pins introduced only in requirements.txt.
+    - name: Install the pinned runtime and development tools together
+      if: matrix.profile == 'pinned'
+      run: |
+        python -m venv .venv
+        .venv/bin/python -m pip install -r requirements.txt -e ".[dev]"
+
+    - name: Install the minimum supported Scapy
+      if: matrix.profile == 'scapy-minimum'
+      run: |
+        python -m venv .venv
+        .venv/bin/python -m pip install -e ".[dev]" "scapy==2.5.0"
+
+    - name: Verify installed dependencies and run the suite
+      run: |
+        .venv/bin/python -m pip check
+        .venv/bin/python -m pip freeze
+        make coverage
+
   integration:
     # The trace parser has broken across nftables releases before, and a broken
     # parser is a *silent* failure: it stops seeing rather than erroring. So the
@@ -103,10 +146,12 @@ jobs:
     - name: Bootstrap Environment
       run: make setup
 
-    # Includes test_parser_understands_every_line_of_a_real_trace, which fails
-    # if this kernel emits a trace format the parser does not understand.
-    - name: Run privileged oracle integration tests
-      run: make integration-test
+    # The pytest marker selects tests; it does not grant root. Fail explicitly
+    # if privilege elevation fails, rather than passing a suite of skipped tests.
+    - name: Run privileged oracle and resource lifecycle integration tests
+      run: |
+        sudo -E .venv/bin/python -c 'import os; assert os.geteuid() == 0'
+        sudo -E .venv/bin/python -m pytest tests -v -m integration
 
   blindness:
     # The meta-test. NSE_FORCE_BLIND makes the parser understand nothing, which

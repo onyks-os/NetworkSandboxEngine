@@ -15,6 +15,32 @@ Two runtime dependencies, both for the engine itself. NSE has no web framework,
 no ASGI server and no JavaScript toolchain: the web interface was archived in
 2.1.0.
 
+### Runtime pins and compatibility checks
+
+`pyproject.toml` declares the library's supported dependency ranges.
+`requirements.txt` records a concrete runtime dependency set for development
+and verification; it does not replace those ranges in the published package.
+To install that set with the development tools in a fresh virtual environment:
+
+```bash
+python -m pip install -r requirements.txt -e ".[dev]"
+python -m pip check
+```
+
+Pydantic requires an exact matching `pydantic-core` version. Update them together
+using the resolver, rather than editing their pins independently:
+
+```bash
+pip-compile --upgrade-package pydantic --upgrade-package pydantic-core \
+    --output-file=requirements.txt pyproject.toml
+```
+
+`pip-compile` is provided by the separate `pip-tools` maintenance tool.
+Dependabot groups these two packages. In addition to the Python 3.10–3.13 unit
+matrix using the declared ranges, CI installs the runtime pins on Python 3.10
+and 3.11 and exercises the minimum Scapy 2.5.0 on Python 3.10. Each compatibility
+job checks the installed dependency metadata and runs the coverage gate.
+
 ---
 
 ## Optional extras

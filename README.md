@@ -133,7 +133,7 @@ and not icmp6`, which discarded routable ICMPv6 as well - see
   * **Simple**: Single sandbox namespace (`nse_<id>`) wired directly to the host.
   * **Gateway**: Router (`nse_router_<id>`) and Server (`nse_server_<id>`) chain for forwarding and NAT testing.
 * **Wire-level Leak Assertions**: `PCAPAsserter` captures on a named interface so a test can assert that a stimulus produced no frame at all. See [Asserting on the wire](#asserting-on-the-wire).
-* **Automated Cleanup**: Startup sweeps detect and remove leftover namespaces and veth pairs from previous aborted runs. Teardowns include exponential backoff retries.
+* **Ownership-aware Cleanup**: Private journals and owner locks protect active runs. Startup recovery removes only verified abandoned resources; prefix matches without ownership evidence are preserved. Failed teardowns retain their records for retry. See [Namespace lifecycle](docs/web/explanation/namespace-lifecycle.md).
 * **CLI YAML Test Runner**: Execute declarative YAML test suites for automated CI/CD pipelines (`nse-runner`). Exits non-zero on a wrong verdict *and* on a verdict it failed to observe.
 * **Strict Quality Standards**: Full static type checking (`mypy --strict`), architectural boundary enforcement (`import-linter`), `ruff` formatting, and a coverage ratchet (`make coverage`, floor 98%).
 

@@ -42,7 +42,7 @@ from nse.models.test_request import PacketSpec
 
 
 @pytest.fixture
-def controller() -> NetnsController:
+def controller(resource_kernel: None) -> NetnsController:
     """A controller whose startup sweep has been neutralised."""
     with patch.object(NetnsController, "startup_sweep", lambda self: None):
         return NetnsController(use_nsenter=False)
@@ -254,6 +254,8 @@ def test_run_raises_on_failure() -> None:
 
 
 def test_destroy_netns_is_idempotent(controller: NetnsController) -> None:
+    with patch("nse.core.netns_controller._run"):
+        controller.create_netns("nse_gone")
     err = subprocess.CalledProcessError(1, "ip", stderr="Cannot remove: No such file or directory")
     with patch("nse.core.netns_controller._run", side_effect=err) as run:
         controller.destroy_netns("nse_gone")
@@ -261,6 +263,8 @@ def test_destroy_netns_is_idempotent(controller: NetnsController) -> None:
 
 
 def test_destroy_netns_retries_then_gives_up(controller: NetnsController) -> None:
+    with patch("nse.core.netns_controller._run"):
+        controller.create_netns("nse_busy")
     err = subprocess.CalledProcessError(1, "ip", stderr="Device or resource busy")
     with (
         patch("nse.core.netns_controller._run", side_effect=err) as run,
@@ -268,9 +272,14 @@ def test_destroy_netns_retries_then_gives_up(controller: NetnsController) -> Non
     ):
         controller.destroy_netns("nse_busy")
     assert run.call_count == 3
+    assert "nse_busy" in controller._active_ns
+    assert controller._registry.data is not None
+    assert controller._registry.data.resources
 
 
 def test_destroy_netns_survives_a_timeout(controller: NetnsController) -> None:
+    with patch("nse.core.netns_controller._run"):
+        controller.create_netns("nse_stuck")
     with patch(
         "nse.core.netns_controller._run",
         side_effect=subprocess.TimeoutExpired("ip", 10.0),
@@ -295,31 +304,32 @@ def test_create_netns_tolerates_missing_sysctl(controller: NetnsController) -> N
 
 
 def test_cleanup_all_destroys_every_tracked_namespace(controller: NetnsController) -> None:
-    controller._active_ns = {"nse_a", "nse_b"}
-    with patch.object(controller, "destroy_netns") as destroy:
+    with patch("nse.core.netns_controller._run") as run:
+        controller.create_netns("nse_a")
+        controller.create_netns("nse_b")
         controller.cleanup_all()
-    assert destroy.call_count == 2
+    deleted = [
+        call.args[0][-1] for call in run.call_args_list if call.args[0][1:3] == ["netns", "del"]
+    ]
+    assert set(deleted) == {"nse_a", "nse_b"}
+    assert not controller._active_ns
 
 
-def test_startup_sweep_removes_orphans() -> None:
-    netns_list = MagicMock(returncode=0, stdout="nse_dead (id: 1)\nunrelated\n")
-    link_list = MagicMock(returncode=0, stdout="3: vhr-dead@if4: <BROADCAST>\n4: eth0: <UP>\n")
-    deletions: list[list[str]] = []
-
-    def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
-        if cmd[:3] == [resolve("ip"), "netns", "list"]:
-            return netns_list
-        if cmd[:3] == [resolve("ip"), "link", "show"]:
-            return link_list
-        deletions.append(cmd)
-        return MagicMock(returncode=0)
-
-    with patch("subprocess.run", side_effect=fake_run):
+def test_startup_sweep_preserves_unregistered_prefix_matches(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with (
+        patch(
+            "nse.core.resource_network.NetworkResources.unmarked",
+            return_value=["nse_dead", "vhr-dead"],
+        ),
+        patch("nse.core.netns_controller._run") as run,
+    ):
         NetnsController(use_nsenter=False)
-
-    assert [resolve("ip"), "netns", "del", "nse_dead"] in deletions
-    assert [resolve("ip"), "link", "del", "vhr-dead"] in deletions
-    assert not any("eth0" in c for c in deletions)
+    run.assert_not_called()
+    assert "nse_dead" in caplog.text
+    assert "vhr-dead" in caplog.text
+    assert "left untouched" in caplog.text
 
 
 def test_startup_sweep_survives_a_missing_ip_binary() -> None:

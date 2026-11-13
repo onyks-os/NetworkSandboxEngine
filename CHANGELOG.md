@@ -8,6 +8,33 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Thi
 
 ## [Unreleased]
 
+The next release is **2.2.0**: the planned public API additions belong in a
+minor release under Semantic Versioning. See `docs/PLAN-v2.2.0.md`.
+
+### Fixed
+
+- Replace prefix-based startup deletion with private ownership journals,
+  lifetime owner locks and coordinated recovery. Live controllers, unmarked
+  legacy resources, replaced names and uncertain metadata are preserved.
+- Route ordinary teardown through the same ownership checks, including the
+  pipeline's host veth cleanup. A failed setup cannot remove another controller's
+  link; deletion failures retain their records for retry. Namespace and veth
+  method signatures and return types are unchanged, but `destroy_netns()` now
+  removes only resources owned by that controller.
+- Add real two-process traffic tests for normal teardown, SIGKILL and recovery
+  before veth alias application, plus regressions for corrupt metadata,
+  concurrent recoverers and fork/exec lock inheritance. Integration CI now
+  explicitly elevates privileges so these tests execute instead of skipping.
+
+### Maintenance
+
+- Update Pydantic and pydantic-core together to 2.14.2 and 2.50.2 using the
+  resolver. Their separate dependency PRs each left an incompatible pair of
+  runtime pins, which the existing installs from `pyproject.toml` did not test.
+- Group Pydantic/core updates in Dependabot and add CI coverage for installation
+  of `requirements.txt` on Python 3.10/3.11 and the minimum Scapy 2.5.0 on Python
+  3.10, including `pip check` and the coverage gate.
+
 ### Documentation
 
 - **The README no longer opens with a screenshot of the web interface this
