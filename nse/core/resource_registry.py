@@ -220,6 +220,7 @@ class ResourceRegistry:
         self.boot_id = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
         self._mutex = threading.RLock()
         self.data: Ownership | None = None
+        self._editing: Journal | None = None
 
     def _check_process(self) -> None:
         if os.getpid() != self.pid or self._closed:
@@ -260,6 +261,23 @@ class ResourceRegistry:
 
     @contextlib.contextmanager
     def edit(self) -> Iterator[Journal]:
+        # A topology transaction holds the coordination lock across all of its
+        # mutations. Nested helpers reuse that journal instead of flocking a
+        # second file description (which would deadlock even in this process).
+        with self._mutex:
+            self._check_process()
+            if self._editing is not None:
+                yield self._editing
+                return
+            with self._edit() as journal:
+                self._editing = journal
+                try:
+                    yield journal
+                finally:
+                    self._editing = None
+
+    @contextlib.contextmanager
+    def _edit(self) -> Iterator[Journal]:
         with self._locked_directory(create=True) as directory:
             assert directory is not None
             if self.data is None:

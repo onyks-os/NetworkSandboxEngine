@@ -59,8 +59,8 @@ def _worker(
         name,
         f"vhr-{name}",
         f"vrh-{name}",
-        f"198.18.{number}.1/24",
-        f"198.18.{number}.2/24",
+        [f"198.18.{number}.1/24", f"fd42:{number}::1/64"],
+        [f"198.18.{number}.2/24", f"fd42:{number}::2/64"],
     )
     pipe.send("ready")
     try:

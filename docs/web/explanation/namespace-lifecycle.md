@@ -13,10 +13,34 @@ The pipeline derives names from its test ID:
 | Simple namespace | `nse_<test_id>` | `nse_a1b2c3d4e5f6` |
 | Router namespace | `nsr_<test_id>` | `nsr_a1b2c3d4e5f6` |
 | Server namespace | `nss_<test_id>` | `nss_a1b2c3d4e5f6` |
-| Host veth | `vhr-<first 8 characters>` | `vhr-a1b2c3d4` |
-| Router host veth | `vrh-<first 8 characters>` | `vrh-a1b2c3d4` |
-| Router server veth | `vrs-<first 8 characters>` | `vrs-a1b2c3d4` |
-| Server veth | `vsr-<first 8 characters>` | `vsr-a1b2c3d4` |
+| Host veth | `vhr-<suffix>` | `vhr-3f9a0c41b2e` |
+| Peer veth (simple netns) / router host veth | `vrh-<suffix>` | `vrh-3f9a0c41b2e` |
+| Router server veth | `vrs-<suffix>` | `vrs-3f9a0c41b2e` |
+| Server veth | `vsr-<suffix>` | `vsr-3f9a0c41b2e` |
+
+`<suffix>` is the first 11 hex characters of a BLAKE2s digest of the **whole**
+test ID (or of the namespace name for `create_namespace()`), so every name fits
+Linux's 15 byte limit and IDs sharing a prefix no longer collide. Before v2.2.0
+the suffix was the first 8 characters of the ID, and the simple topology's
+in-namespace peer was always called `veth-nse`; that fixed name was created in
+the host namespace first, so two concurrent runs collided on it.
+
+!!! note "Migrating rules that matched `veth-nse`"
+    Since v2.2.0 the simple topology's in-namespace interface is
+    `vrh-<suffix>`, not `veth-nse`, and this is the permanent name. Rules
+    inside the sandbox that match `iifname "veth-nse"` / `oifname "veth-nse"`
+    should match the prefix instead (`iifname "vrh-*"`) or use the exact name
+    from `derive_names(test_id).veth_router_host`.
+
+Before any mutation, setup checks that the interface names are free and that the
+requested subnets do not overlap a route already present on the host (including
+another run's connected or gateway routes). A conflict fails with
+`OwnershipError` and leaves the kernel untouched. Concurrent topologies need
+distinct subnets: pass them through `TestRequest.network`
+(`SimpleNetwork`/`GatewayNetwork`) or the YAML `network:` key. The defaults are
+unchanged for single runs. Gateway host routes are derived from the configured
+server subnets and recorded as owned resources; pre-existing routes are never
+replaced or removed.
 
 `create_namespace(name)` continues to expose its interface names through
 `sandbox.ext_iface` and `sandbox.peer_iface`. Neither these conventions nor

@@ -2,16 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
 import subprocess
+import uuid
 from collections.abc import Callable
 from unittest.mock import patch
 
 import pytest
 
+from nse.core.naming import derive_names
 from nse.core.netns_controller import NetnsController
+from nse.core.netns_controller import TestRun as Run
 from nse.core.paths import resolve
-from nse.core.resource_network import Inspection, LinkInfo, NetworkResources
+from nse.core.pipeline import run_test_pipeline
+from nse.core.resource_network import Inspection, LinkInfo, NetworkResources, RouteInfo
 from nse.core.resource_registry import Journal, OwnershipError, Resource
+from nse.models.test_request import PacketSpec, TestRequest
 
 
 class Kernel:
@@ -98,12 +104,126 @@ def kernel(monkeypatch: pytest.MonkeyPatch) -> Kernel:
     monkeypatch.setattr(NetworkResources, "identity", lambda self, name: kernel.identity(name))
     monkeypatch.setattr(NetworkResources, "links", lambda self, name: kernel.links(name))
     monkeypatch.setattr(NetworkResources, "unmarked", lambda self: kernel.unmarked())
+    monkeypatch.setattr(NetworkResources, "routes", lambda self, version: [])
     return kernel
 
 
 def topology(controller: NetnsController, name: str) -> None:
     controller.create_netns(name)
     controller.create_veth_pair(name, f"vhr-{name}", f"vrh-{name}")
+
+
+@pytest.mark.parametrize("mode", ["simple", "gateway"])
+def test_setup_rolls_back_at_each_failing_command(kernel: Kernel, mode: str) -> None:
+    request = TestRequest(
+        rules="table ip filter {}", packets=[PacketSpec(protocol="udp")], topology=mode
+    )
+    controller = NetnsController(use_nsenter=False)
+    names = derive_names("transaction")
+    controller._setup_topology(names, request, uuid.uuid4().hex)
+    setup_commands = list(kernel.commands)
+    controller.cleanup_all()
+    for position, command in enumerate(setup_commands):
+        # DAD is deliberately best effort and its failures are warnings.
+        if any("accept_dad" in arg for arg in command):
+            continue
+        controller = NetnsController(use_nsenter=False)
+        run_id = uuid.uuid4().hex
+        step = 0
+
+        def fail_once(
+            command: list[str], timeout: float = 10.0, *, target: int = position
+        ) -> subprocess.CompletedProcess[str]:
+            nonlocal step
+            current, step = step, step + 1
+            if current == target:
+                raise subprocess.CalledProcessError(1, command, stderr="injected setup failure")
+            return kernel.run(command, timeout)
+
+        with (
+            patch("nse.core.netns_controller._run", fail_once),
+            pytest.raises(subprocess.CalledProcessError),
+        ):
+            controller._setup_topology(names, request, run_id)
+        assert set(kernel.namespaces) == {None}, (mode, command)
+        assert not kernel.devices, (mode, command)
+        assert not kernel.routes, (mode, command)
+        assert not controller._registry.data.resources
+        assert not controller._runs
+        controller._registry.close()
+
+
+@pytest.mark.parametrize("mode", ["simple", "gateway"])
+def test_duplicate_run_in_same_controller_cannot_teardown_the_first(
+    kernel: Kernel, mode: str
+) -> None:
+    request = TestRequest(
+        rules="table ip filter {}", packets=[PacketSpec(protocol="udp")], topology=mode
+    )
+    controller = NetnsController(use_nsenter=False)
+    names = derive_names("duplicate")
+    first_id = uuid.uuid4().hex
+    controller._setup_topology(names, request, first_id)
+    devices = dict(kernel.devices)
+    commands = list(kernel.commands)
+    events = asyncio.run(
+        run_test_pipeline(
+            request,
+            controller,
+            run=Run(test_id="duplicate", netns_name=names.netns, request=request),
+        )
+    )
+    assert any(e.type == "error" and "already active" in e.raw_message for e in events)
+    assert kernel.commands == commands
+    assert kernel.devices == devices
+    assert all(entry.run_id == first_id for entry in controller._registry.data.resources)
+    controller.cleanup_all()
+
+
+def test_conflicts_are_reported_before_mutation_and_existing_routes_survive(
+    kernel: Kernel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    controller = NetnsController(use_nsenter=False)
+    monkeypatch.setattr(
+        NetworkResources,
+        "routes",
+        lambda self, version: (
+            [RouteInfo(dst="10.0.2.0/24", dev="external")] if version == 4 else []
+        ),
+    )
+    with pytest.raises(OwnershipError, match="conflicts with host route"):
+        controller.create_gateway_topology("r", "s", "vhr-a", "vrh-a", "vrs-a", "vsr-a")
+    assert not kernel.commands
+    assert not controller._registry.data.resources
+    assert not controller._runs
+
+
+def test_custom_gateway_routes_follow_the_supplied_server_subnets(kernel: Kernel) -> None:
+    controller = NetnsController(use_nsenter=False)
+    controller.create_gateway_topology(
+        "r",
+        "s",
+        "vhr-a",
+        "vrh-a",
+        "vrs-a",
+        "vsr-a",
+        host_v4="198.18.1.1/24",
+        router_host_v4="198.18.1.2/24",
+        router_server_v4="198.18.2.1/25",
+        server_v4="198.18.2.2/25",
+        host_v6="fd42:1::1/64",
+        router_host_v6="fd42:1::2/64",
+        router_server_v6="fd42:2::1/80",
+        server_v6="fd42:2::2/80",
+    )
+    host_routes = [
+        command
+        for command in kernel.commands
+        if command[1:3] == ["route", "add"] or command[1:4] == ["-6", "route", "add"]
+    ]
+    assert "198.18.2.0/25" in host_routes[0]
+    assert "fd42:2::/80" in host_routes[1]
+    controller.cleanup_all()
 
 
 def test_live_controllers_and_separate_runs_do_not_remove_each_other(kernel: Kernel) -> None:

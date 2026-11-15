@@ -25,6 +25,36 @@ minor release under Semantic Versioning. See `docs/PLAN-v2.2.0.md`.
   before veth alias application, plus regressions for corrupt metadata,
   concurrent recoverers and fork/exec lock inheritance. Integration CI now
   explicitly elevates privileges so these tests execute instead of skipping.
+- Make topology setup transactional: namespaces are reserved under the shared
+  lock before any kernel change, a duplicate run ID in the same controller fails
+  without tearing down the active run, and a failure or cancellation at any
+  setup step rolls back every resource created so far. Cancellation now waits
+  for work already running in a thread before cleanup.
+- Remove name collisions between concurrent runs: interface suffixes are a
+  digest of the whole test ID within Linux's 15 byte limit, and the simple
+  topology no longer creates a fixed `veth-nse` peer in the host namespace (its
+  in-namespace peer is now `vrh-<suffix>`). **Behaviour change:** rules that
+  matched `iifname "veth-nse"` inside the simple sandbox must match
+  `iifname "vrh-*"` or the name from `derive_names()`; `veth-nse` will not
+  return. Setup rejects interface names in use
+  and subnets overlapping existing host routes before touching the kernel.
+- Derive gateway host routes from the configured server subnets and record them
+  as owned resources; pre-existing routes are never replaced or removed.
+- Fix the gateway YAML case reporting three verdicts for two packets: the
+  listener's dropped UDP reply was counted as a verdict. Traces are attributed
+  to stimuli from their first hook; replies and background traffic are kept but
+  not counted, and canaries must match their own packet. Oracle count checks are
+  unchanged.
+- `NamespaceSandbox.inject_packet()` now honours the controller's `use_nsenter`
+  choice, fixing injection in containers.
+
+### Added
+
+- `TestRequest.network` (`SimpleNetwork` / `GatewayNetwork`) and the YAML
+  `network:` key, for explicit dual stack addresses so independent topologies
+  can run side by side. Defaults are unchanged.
+- `TraceEvent` fields `packet_src_ip`, `packet_dst_ip`, `packet_protocol`,
+  `packet_src_port`, `packet_dst_port` and `packet_role`.
 
 ### Maintenance
 

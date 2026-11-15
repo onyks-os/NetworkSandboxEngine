@@ -1,6 +1,6 @@
 # NSE v2.2.0 — piano di lavoro
 
-Stato: fasi 0 e 1 completate; prossima fase 2. Aggiornato: 14 novembre 2026.
+Stato: fasi 0, 1 e 2 completate; prossima fase 3. Aggiornato: 15 novembre 2026.
 
 Obiettivo: rendere verificabili proprietà delle risorse, disponibilità degli
 osservatori e completezza dei risultati, mantenendo il motore piccolo e le API
@@ -121,27 +121,27 @@ creazione del namespace e applicazione del primo marcatore.
 
 ## 2. Setup transazionale e convivenza delle topologie
 
-- [ ] Portare setup e teardown semplice/gateway sotto lo stesso meccanismo di
+- [x] Portare setup e teardown semplice/gateway sotto lo stesso meccanismo di
   proprietà. Smontare in ordine inverso anche dopo errori prima del `yield`,
   cancellazione asincrona e fallimenti a metà configurazione.
-- [ ] Riservare l'identità della run prima del setup: un `TestRun` con ID
+- [x] Riservare l'identità della run prima del setup: un `TestRun` con ID
   duplicato nello stesso controller deve fallire senza eseguire il teardown
   dell'esperimento già attivo. Il caso fra controller distinti è coperto dalla
   fase 1; la pipeline genera già ID casuali quando il chiamante non li fornisce.
-- [ ] Evitare collisioni dei nomi temporanei nel namespace host e dei suffissi
+- [x] Evitare collisioni dei nomi temporanei nel namespace host e dei suffissi
   troncati, rispettando il limite Linux dei nomi delle interfacce.
-- [ ] Tracciare le rotte host create; non sostituire o cancellare rotte
+- [x] Tracciare le rotte host create; non sostituire o cancellare rotte
   preesistenti. Derivare le destinazioni dai parametri di rete invece delle
   subnet fisse attualmente usate dal gateway.
-- [ ] Verificare interferenze fra subnet, routing e neighbor discovery di run
+- [x] Verificare interferenze fra subnet, routing e neighbor discovery di run
   simultanee. Mantenere gli indirizzi predefiniti per l'uso singolo e consentire
   configurazioni indipendenti con opzioni additive dove necessario.
-- [ ] Per configurazioni incompatibili sullo stesso host, fallire prima delle
+- [x] Per configurazioni incompatibili sullo stesso host, fallire prima delle
   modifiche indicando il conflitto. Non promettere convivenza di subnet
   sovrapposte senza un meccanismo di isolamento verificato.
-- [ ] Correggere la propagazione di `use_nsenter` nell'helper di iniezione del
+- [x] Correggere la propagazione di `use_nsenter` nell'helper di iniezione del
   sandbox e rendere i relativi test indipendenti dall'ambiente di esecuzione.
-- [ ] Diagnosticare il verdetto aggiuntivo del caso gateway della suite YAML,
+- [x] Diagnosticare il verdetto aggiuntivo del caso gateway della suite YAML,
   riprodotto nella baseline sia con i pin originali sia con quelli aggiornati.
   Attribuire le tracce agli stimoli senza allentare i controlli dell'oracle.
 
@@ -149,6 +149,9 @@ Completamento: matrice semplice/semplice, gateway/gateway e mista con indirizzi
 compatibili; guasti iniettati nei passaggi del setup non lasciano risorse non
 registrate. Il test verifica flussi IPv4/IPv6 reali durante setup e chiusura
 dell'altra run, oltre all'esistenza dei namespace.
+
+Esito: completata il 15 novembre 2026; dettagli e verifiche in
+[PHASE2-v2.2.0.md](PHASE2-v2.2.0.md).
 
 ## 3. Disponibilità della cattura e rapporto diagnostico
 

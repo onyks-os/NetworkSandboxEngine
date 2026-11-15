@@ -15,14 +15,18 @@ import logging
 import subprocess
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator, Sequence
 from dataclasses import dataclass, field
+from ipaddress import ip_interface, ip_network
 from typing import TYPE_CHECKING, Any, cast
 
+from nse.core.async_work import run_blocking
+from nse.core.naming import NamespaceNames, interface_suffix
 from nse.core.paths import resolve
 from nse.core.resource_network import NetworkResources
 from nse.core.resource_registry import Journal, OwnershipError, Resource, ResourceRegistry
 from nse.core.utils import is_in_container
+from nse.models.network_config import GatewayNetwork, SimpleNetwork
 
 if TYPE_CHECKING:
     from nse.models.test_request import TestRequest
@@ -54,8 +58,10 @@ class NamespaceSandbox:
         self.controller = controller
         self.name = name
         # We derive interface names from the sandbox name
-        self.ext_iface = f"vhr-{name[:8]}"
-        self.peer_iface = f"vrh-{name[:8]}"
+        self.ext_iface = f"vhr-{interface_suffix(name)}"
+        self.peer_iface = f"vrh-{interface_suffix(name)}"
+        self._source_v4 = "10.0.1.1"
+        self._source_v6 = "fd00:1::1"
 
     async def exec(self, command: str) -> subprocess.CompletedProcess[bytes]:
         """
@@ -96,18 +102,16 @@ class NamespaceSandbox:
         from nse.core.scapy_injector import ScapyInjector
         from nse.models.test_request import PacketSpec
 
-        injector = ScapyInjector()
+        injector = ScapyInjector(use_nsenter=self.controller.use_nsenter)
         packet = PacketSpec(
             protocol=cast(Any, protocol),
             dst_port=dst_port,
             dst_ip=dst_ip,
-            src_ip=src_ip or ("10.0.1.1" if "." in dst_ip else "fd00:1::1"),
+            src_ip=src_ip or (self._source_v4 if "." in dst_ip else self._source_v6),
         )
 
-        loop = asyncio.get_running_loop()
         # Sniffing/injection scapy operations can be blocking, run in executor
-        await loop.run_in_executor(
-            None,
+        await run_blocking(
             injector.inject,
             packet,
             self.name,
@@ -143,21 +147,26 @@ class NetnsController:
         except (OSError, ValueError, OwnershipError, subprocess.SubprocessError) as exc:
             logger.warning("NSE startup recovery incomplete; resources preserved: %s", exc)
 
-    def _cleanup_resources(self, journal: Journal, namespace: str | None = None) -> None:
+    def _cleanup_resources(
+        self, journal: Journal, namespace: str | None = None, run_id: str | None = None
+    ) -> None:
         # Delete links before namespace names: a process may keep an unnamed
         # namespace alive. Routes attached to a deleted link disappear with it.
         links = [
             entry
-            for entry in journal.data.resources
+            for entry in reversed(journal.data.resources)
             if entry.kind == "link"
+            and (run_id is None or entry.run_id == run_id)
             and (namespace is None or namespace in (entry.netns, entry.peer_netns))
         ]
         for entry in links:
             self._remove_resource(journal, entry)
         namespaces = [
             entry
-            for entry in journal.data.resources
-            if entry.kind == "namespace" and (namespace is None or entry.name == namespace)
+            for entry in reversed(journal.data.resources)
+            if entry.kind == "namespace"
+            and (namespace is None or entry.name == namespace)
+            and (run_id is None or entry.run_id == run_id)
         ]
         for entry in namespaces:
             if any(
@@ -172,6 +181,96 @@ class NetnsController:
             ):
                 self._active_ns.discard(entry.name)
                 self._runs.pop(entry.name, None)
+
+    @contextlib.contextmanager
+    def _transaction(self, namespaces: Sequence[str], run_id: str) -> Iterator[None]:
+        """Reserve all names and serialize preflight/setup against other NSE owners."""
+        with self._registry.edit() as journal:
+            if len(set(namespaces)) != len(namespaces):
+                raise OwnershipError("a topology requires distinct namespace names")
+            for name in namespaces:
+                # Validate before either reserving or issuing a kernel command.
+                Resource(kind="namespace", name=name, run_id=run_id)
+                if name in self._runs or self._resources.namespace_exists(name):
+                    raise OwnershipError(f"namespace {name} is already active or reserved")
+            for name in namespaces:
+                self._runs[name] = run_id
+            try:
+                yield
+            except BaseException:
+                self._cleanup_resources(journal, run_id=run_id)
+                raise
+            finally:
+                for name in namespaces:
+                    if not any(entry.run_id == run_id for entry in journal.data.resources):
+                        self._runs.pop(name, None)
+
+    def _cleanup_run(self, run_id: str) -> None:
+        if self._registry.data is not None:
+            with self._registry.edit() as journal:
+                self._cleanup_resources(journal, run_id=run_id)
+
+    def _preflight(self, interfaces: Sequence[str], addresses: Sequence[str]) -> None:
+        if len(set(interfaces)) != len(interfaces) or any(
+            not name or len(name.encode()) > 15 or any(c in name for c in "/: \t\n")
+            for name in interfaces
+        ):
+            raise ValueError("interface names must be distinct and fit Linux's 15 byte limit")
+        existing = {link.ifname for link in self._resources.links(None)}
+        if existing.intersection(interfaces):
+            raise OwnershipError(
+                f"host interface name conflict: {sorted(existing.intersection(interfaces))}"
+            )
+        networks = [ip_interface(address).network for address in addresses]
+        for version in (4, 6):
+            for route in self._resources.routes(version):
+                if not route.dst or route.dst == "default":
+                    continue
+                destination = ip_network(route.dst, strict=False)
+                if destination.prefixlen == 0:
+                    continue
+                for network in networks:
+                    if network.version == destination.version and network.overlaps(destination):
+                        raise OwnershipError(
+                            f"subnet {network} conflicts with host route {destination} on {route.dev}"
+                        )
+
+    def _setup_topology(self, names: NamespaceNames, request: TestRequest, run_id: str) -> None:
+        from nse.models.test_request import TopologyType
+
+        if request.topology == TopologyType.GATEWAY:
+            config = request.network or GatewayNetwork()
+            assert isinstance(config, GatewayNetwork)
+            with self._transaction((names.router_ns, names.server_ns), run_id):
+                self._preflight(
+                    (names.veth_host, names.veth_router_host),
+                    (config.host_v4, config.host_v6, config.server_v4, config.server_v6),
+                )
+                self._configure_gateway(
+                    names.router_ns,
+                    names.server_ns,
+                    names.veth_host,
+                    names.veth_router_host,
+                    names.veth_router_server,
+                    names.veth_server,
+                    config,
+                )
+        else:
+            config_simple = request.network or SimpleNetwork()
+            assert isinstance(config_simple, SimpleNetwork)
+            with self._transaction((names.netns,), run_id):
+                self._preflight(
+                    (names.veth_host, names.veth_router_host),
+                    (config_simple.host_v4, config_simple.host_v6),
+                )
+                self.create_netns(names.netns)
+                self.create_veth_pair(
+                    names.netns,
+                    names.veth_host,
+                    names.veth_router_host,
+                    [config_simple.host_v4, config_simple.host_v6],
+                    [config_simple.peer_v4, config_simple.peer_v6],
+                )
 
     def _remove_resource(self, journal: Journal, entry: Resource) -> bool:
         try:
@@ -321,12 +420,25 @@ class NetnsController:
             )
             _run([resolve("ip"), "netns", "add", name])
             self._active_ns.add(name)
-            self._run_in_netns(
-                name, [resolve("ip"), "link", "set", "dev", "lo", "alias", journal.marker(entry)]
-            )
             entry.identity = self._resources.identity(name)
             if entry.identity is None:
                 raise OwnershipError(f"cannot confirm identity of newly created namespace {name}")
+            try:
+                self._run_in_netns(
+                    name,
+                    [resolve("ip"), "link", "set", "dev", "lo", "alias", journal.marker(entry)],
+                )
+            except BaseException:
+                # Live rollback has the successful exclusive creation and its
+                # inode as evidence. Crash recovery still requires the marker.
+                if (
+                    self._resources.identity(name) == entry.identity
+                    and all(not link.ifalias for link in self._resources.links(name))
+                    and self._delete_namespace(name)
+                ):
+                    journal.discard(entry)
+                    self._active_ns.discard(name)
+                raise
             if self._resources.inspect(entry, journal.marker(entry)).status != "owned":
                 raise OwnershipError(f"cannot confirm ownership marker of namespace {name}")
             entry.state = "created"
@@ -395,29 +507,36 @@ class NetnsController:
         """
         sandbox = NamespaceSandbox(self, name)
 
-        # Setup
-        self.create_netns(name)
+        run_id = uuid.uuid4().hex
 
-        # Bring loopback interface up
-        self._run_in_netns(name, [resolve("ip"), "link", "set", "lo", "up"])
-
-        # Setup links
-        self.create_veth_pair(
-            netns_name=name,
-            veth_host=sandbox.ext_iface,
-            veth_peer=sandbox.peer_iface,
-            host_ip=host_ip,
-            peer_ip=peer_ip,
-        )
+        def setup() -> None:
+            with self._transaction((name,), run_id):
+                config = self._simple_network(host_ip, peer_ip)
+                self._preflight(
+                    (sandbox.ext_iface, sandbox.peer_iface), (config.host_v4, config.host_v6)
+                )
+                sandbox._source_v4 = str(ip_interface(config.host_v4).ip)
+                sandbox._source_v6 = str(ip_interface(config.host_v6).ip)
+                self.create_netns(name)
+                self.create_veth_pair(name, sandbox.ext_iface, sandbox.peer_iface, host_ip, peer_ip)
 
         try:
+            await run_blocking(setup)
             yield sandbox
         finally:
-            # Cleanup links
-            self._cleanup_link(sandbox.ext_iface)
+            await run_blocking(self._cleanup_run, run_id)
 
-            # Cleanup netns
-            self.destroy_netns(name)
+    @staticmethod
+    def _simple_network(host_ip: str | list[str], peer_ip: str | list[str]) -> SimpleNetwork:
+        addresses = {}
+        for label, value in (("host", host_ip), ("peer", peer_ip)):
+            for address in [value] if isinstance(value, str) else value:
+                family = ip_interface(address).version
+                key = f"{label}_v{family}"
+                if key in addresses:
+                    raise ValueError("at most one address per family is supported on each endpoint")
+                addresses[key] = address
+        return SimpleNetwork(**addresses)
 
     def create_veth_pair(
         self,
@@ -430,40 +549,23 @@ class NetnsController:
         """
         Create a veth pair, move one end into *netns_name*, and assign IPs.
         """
-        logger.debug(
-            "Creating veth pair %s <-> %s in netns %s",
-            veth_host,
-            veth_peer,
-            netns_name,
-        )
+        config = self._simple_network(host_ip, peer_ip)
+        with self._registry.edit() as journal:
+            self._preflight((veth_host, veth_peer), (config.host_v4, config.host_v6))
+            before = {entry.token for entry in journal.data.resources}
+            try:
+                self._configure_pair(netns_name, veth_host, veth_peer, config)
+            except BaseException:
+                for entry in reversed(list(journal.data.resources)):
+                    if entry.kind == "link" and entry.token not in before:
+                        self._remove_resource(journal, entry)
+                raise
 
-        # Parse host and peer IPs (which could be single strings or list of strings)
-        host_ips = [host_ip] if isinstance(host_ip, str) else list(host_ip)
-        peer_ips = [peer_ip] if isinstance(peer_ip, str) else list(peer_ip)
-
-        v4_host, v6_host = None, None
-        v4_peer, v6_peer = None, None
-
-        for ip in host_ips:
-            if ":" in ip:
-                v6_host = ip
-            else:
-                v4_host = ip
-        for ip in peer_ips:
-            if ":" in ip:
-                v6_peer = ip
-            else:
-                v4_peer = ip
-
-        # Inject defaults if missing to support hybrid/both tests easily
-        if not v4_host:
-            v4_host = "10.0.0.1/24"
-        if not v4_peer:
-            v4_peer = "10.0.0.2/24"
-        if not v6_host:
-            v6_host = "fd00::1/64"
-        if not v6_peer:
-            v6_peer = "fd00::2/64"
+    def _configure_pair(
+        self, netns_name: str, veth_host: str, veth_peer: str, config: SimpleNetwork
+    ) -> None:
+        v4_host, v6_host = config.host_v4, config.host_v6
+        v4_peer, v6_peer = config.peer_v4, config.peer_v6
 
         # Create veth pair in the root namespace
         self._create_owned_pair(veth_host, veth_peer, netns_name)
@@ -526,11 +628,46 @@ class NetnsController:
         Create router and server namespaces, build double veth links,
         enable IPv4/IPv6 forwarding inside the router, and add transit routes.
         """
-        logger.info("Setting up gateway topology: %s <-> %s", router_ns, server_ns)
-        # Both namespaces belong to the same experiment within this controller.
-        run_id = uuid.uuid4().hex
-        self._runs.setdefault(router_ns, run_id)
-        self._runs.setdefault(server_ns, run_id)
+        config = GatewayNetwork(
+            host_v4=host_v4,
+            router_host_v4=router_host_v4,
+            router_server_v4=router_server_v4,
+            server_v4=server_v4,
+            host_v6=host_v6,
+            router_host_v6=router_host_v6,
+            router_server_v6=router_server_v6,
+            server_v6=server_v6,
+        )
+        with self._transaction((router_ns, server_ns), uuid.uuid4().hex):
+            self._preflight((veth_host, veth_router_host), (host_v4, host_v6, server_v4, server_v6))
+            self._configure_gateway(
+                router_ns,
+                server_ns,
+                veth_host,
+                veth_router_host,
+                veth_router_server,
+                veth_server,
+                config,
+            )
+
+    def _configure_gateway(
+        self,
+        router_ns: str,
+        server_ns: str,
+        veth_host: str,
+        veth_router_host: str,
+        veth_router_server: str,
+        veth_server: str,
+        config: GatewayNetwork,
+    ) -> None:
+        host_v4, host_v6 = config.host_v4, config.host_v6
+        router_host_v4, router_host_v6 = config.router_host_v4, config.router_host_v6
+        router_server_v4, router_server_v6 = config.router_server_v4, config.router_server_v6
+        server_v4, server_v6 = config.server_v4, config.server_v6
+        if len({veth_router_host, veth_router_server, veth_server}) != 3:
+            raise ValueError("gateway interfaces must have distinct names")
+        # Validate the second pair too before creating either namespace.
+        self._preflight((veth_router_server, veth_server), ())
         # Create namespaces
         self.create_netns(router_ns)
         self.create_netns(server_ns)
@@ -667,7 +804,16 @@ class NetnsController:
         host_rt_via = router_host_v4.split("/")[0]
         host_rt_via6 = router_host_v6.split("/")[0]
         self._create_owned_route(
-            [resolve("ip"), "route", "add", "10.0.2.0/24", "via", host_rt_via, "dev", veth_host],
+            [
+                resolve("ip"),
+                "route",
+                "add",
+                str(ip_interface(server_v4).network),
+                "via",
+                host_rt_via,
+                "dev",
+                veth_host,
+            ],
             veth_host,
         )
         self._create_owned_route(
@@ -676,7 +822,7 @@ class NetnsController:
                 "-6",
                 "route",
                 "add",
-                "fd00:2::/64",
+                str(ip_interface(server_v6).network),
                 "via",
                 host_rt_via6,
                 "dev",

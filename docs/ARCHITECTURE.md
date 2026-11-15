@@ -153,18 +153,22 @@ appear in a caller's verdict stream. See
 ```text
   Root (Host) Namespace              Sandbox Namespace ("nse_XYZ")
 +------------------------+          +------------------------+
-|  iface: vhr-XYZ        |          |  iface: veth-nse       |
+|  iface: vhr-XYZ        |          |  iface: vrh-XYZ        |
 |  IPv4: 10.0.0.1/24     |<- veth ->|  IPv4: 10.0.0.2/24     |
 |  IPv6: fd00::1/64      |          |  IPv6: fd00::2/64      |
 +------------------------+          +------------------------+
 ```
+
+`XYZ` is an 11 character digest of the test ID (see
+[Namespace Lifecycle](web/explanation/namespace-lifecycle.md)). Addresses shown
+are the defaults; `TestRequest.network` overrides them so that runs can coexist.
 
 ### 4.2 Gateway (Host - Router - Server)
 
 ```text
    Host (Root)             Router Netns ("nsr_XYZ")             Server Netns ("nss_XYZ")
 +--------------+          +--------------------------------+     +--------------+
-| vhr-XYZ      |<- veth ->| vrh-XYZ  (10.0.1.2/fd00:1::2) |     | veth-nse     |
+| vhr-XYZ      |<- veth ->| vrh-XYZ  (10.0.1.2/fd00:1::2) |     | vsr-XYZ      |
 | 10.0.1.1     |          |                                |<- veth ->| 10.0.2.2     |
 | fd00:1::1    |          | vrs-XYZ  (10.0.2.1/fd00:2::1)  |     | fd00:2::2    |
 +--------------+          +--------------------------------+     +--------------+

@@ -87,7 +87,7 @@ class FakeHarvester:
         self.armed = 0
         self.seen_trace_ids: list[str] = []
 
-    def arm_event_signal(self) -> None:
+    def arm_event_signal(self, predicate: Any = None) -> None:
         self.armed += 1
 
     def extend_deadline(self, seconds: float) -> None:
@@ -169,6 +169,7 @@ class StubHarvester:
         self._answers = {"readiness": readiness, "liveness": liveness}
         self._phase = "readiness"
         self.seen_trace_ids: list[str] = []
+        self.matched_trace_ids: set[str] = set()
         self.state = HarvestState.NOT_STARTED
         self.closed = False
         self._problems: list[str] = []
@@ -179,8 +180,8 @@ class StubHarvester:
     async def wait_ready(self, timeout: float = 2.0) -> bool:
         return True
 
-    def arm_event_signal(self) -> None:
-        pass
+    def arm_event_signal(self, predicate: Any = None) -> None:
+        self.matched_trace_ids.clear()
 
     def extend_deadline(self, seconds: float) -> None:
         pass
@@ -189,6 +190,7 @@ class StubHarvester:
         answer = self._answers[self._phase]
         if answer:
             self.seen_trace_ids.append(f"{self._phase}-canary")
+            self.matched_trace_ids.add(f"{self._phase}-canary")
         return answer
 
     def advance(self) -> None:
@@ -325,7 +327,7 @@ async def test_pipeline_reports_rule_validation_errors() -> None:
 async def test_pipeline_reports_unexpected_exceptions() -> None:
     controller = MagicMock()
     controller.use_nsenter = False
-    controller.create_netns.side_effect = OSError("netns quota exceeded")
+    controller._setup_topology.side_effect = OSError("netns quota exceeded")
 
     with (
         patch.object(pipeline_module, "TraceHarvester", StubHarvester),
@@ -441,8 +443,8 @@ async def _run(
 async def test_gateway_topology_builds_and_tears_down_both_namespaces() -> None:
     controller = MagicMock()
     await _run(_gateway_request(), StubHarvester(), controller=controller)
-    controller.create_gateway_topology.assert_called_once()
-    assert controller.destroy_netns.call_count == 2
+    controller._setup_topology.assert_called_once()
+    controller._cleanup_run.assert_called_once_with(controller._setup_topology.call_args.args[2])
     assert controller.create_netns.call_count == 0
 
 
@@ -450,7 +452,7 @@ async def test_gateway_topology_builds_and_tears_down_both_namespaces() -> None:
 async def test_simple_topology_tears_down_one_namespace() -> None:
     controller = MagicMock()
     await _run(_request(), StubHarvester(), controller=controller)
-    assert controller.destroy_netns.call_count == 1
+    controller._cleanup_run.assert_called_once_with(controller._setup_topology.call_args.args[2])
 
 
 @pytest.mark.asyncio

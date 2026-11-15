@@ -52,7 +52,7 @@ def test_netns_lifecycle(mock_run: MagicMock, resource_kernel: None) -> None:
 
 @patch("nse.core.netns_controller._run")
 def test_create_veth_pair(mock_run: MagicMock, resource_kernel: None) -> None:
-    controller = NetnsController()
+    controller = NetnsController(use_nsenter=False)
     controller.create_veth_pair("nse_test", "veth-host", "veth-nse", "10.0.0.1/24", "10.0.0.2/24")
 
     calls = [c[0][0] for c in mock_run.call_args_list]
@@ -310,7 +310,7 @@ def test_trace_event_serialisation() -> None:
 
 @patch("nse.core.netns_controller._run")
 def test_create_gateway_topology(mock_run: MagicMock, resource_kernel: None) -> None:
-    controller = NetnsController()
+    controller = NetnsController(use_nsenter=False)
     controller.create_gateway_topology(
         router_ns="nse_router_t1",
         server_ns="nse_server_t1",
@@ -369,17 +369,20 @@ def test_start_mock_listener(mock_popen: MagicMock) -> None:
 
 @patch("nse.core.netns_controller._run")
 @pytest.mark.asyncio
-async def test_create_namespace_lifecycle_mocked(mock_run: MagicMock) -> None:
+async def test_create_namespace_lifecycle_mocked(
+    mock_run: MagicMock, resource_kernel: None
+) -> None:
     controller = NetnsController()
 
     controller.create_veth_pair = MagicMock()
     controller.create_netns = MagicMock()
-    controller.destroy_netns = MagicMock()
+    controller._cleanup_run = MagicMock()
 
     async with controller.create_namespace("mock_ttp") as ns:
         assert ns.name == "mock_ttp"
-        assert ns.ext_iface == "vhr-mock_ttp"
-        assert ns.peer_iface == "vrh-mock_ttp"
+        assert ns.ext_iface.startswith("vhr-")
+        assert ns.peer_iface.startswith("vrh-")
+        assert len(ns.ext_iface) == len(ns.peer_iface) == 15
 
         with patch("asyncio.create_subprocess_exec") as mock_exec:
             mock_proc = MagicMock()
@@ -393,7 +396,7 @@ async def test_create_namespace_lifecycle_mocked(mock_run: MagicMock) -> None:
             assert res.returncode == 0
             assert res.stdout == b"output"
 
-    assert controller.destroy_netns.called
+    controller._cleanup_run.assert_called_once()
 
 
 @patch("scapy.all.AsyncSniffer")

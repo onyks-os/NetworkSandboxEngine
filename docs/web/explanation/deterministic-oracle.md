@@ -60,7 +60,9 @@ graph LR
    unexpected EOF, a timeout or a crash — and its count of unparsed trace lines
    must be zero.
 6. **Reporting**: canary trace ids are removed from the results, so probes never
-   appear in your verdict stream.
+   appear in your verdict stream. A canary counts as observed only when a trace
+   **matching the canary's packet tuple** arrives, so unrelated traffic in the
+   namespace cannot vouch for the oracle.
 
 Any failure in steps 2, 4 or 5 emits an `error` event. The CLI runner fails on
 error events, and reports them as **oracle errors**, kept separate from firewall
@@ -77,6 +79,17 @@ problems and want different fixes.
   stack shares an id across chains;
 * events from the `nse_trace` scaffolding table are excluded, since they exist
   only to switch tracing on;
+* only **stimulus** traces are counted. The pipeline attributes each trace from
+  the addresses, protocol and ports of its first hook, which runs before any
+  user NAT chain, and records them on every event as `packet_src_ip`,
+  `packet_dst_ip`, `packet_protocol`, `packet_src_port`, `packet_dst_port` and
+  `packet_role` (`stimulus`, `response` or `background`). Later hooks inherit
+  the first role, so translated addresses cannot change it. A server reply, such
+  as the gateway listener's UDP answer being dropped on the way back, is a
+  `response`; spontaneous traffic, such as IPv6 neighbour discovery, is
+  `background`. Both stay in the event stream for diagnosis, but neither adds a
+  verdict. The exact count check is unchanged, so a missing or duplicated
+  stimulus is still an oracle error;
 * `DROP` and `REJECT` beat `ACCEPT`, because a packet accepted by one chain and
   dropped by another did not get through;
 * a trace id that reached the user ruleset but produced **no** verdict is

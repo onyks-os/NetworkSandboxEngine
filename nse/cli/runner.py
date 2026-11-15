@@ -35,6 +35,7 @@ from pydantic import ValidationError
 
 from nse.core.netns_controller import NetnsController
 from nse.core.pipeline import run_test_pipeline
+from nse.models.network_config import GatewayNetwork, SimpleNetwork
 from nse.models.test_request import PacketSpec, TestRequest, TopologyType
 from nse.models.trace_event import TraceEvent
 
@@ -55,7 +56,7 @@ _PACKET_KEYS = frozenset(
         "tcp_flags",
     }
 )
-_CASE_KEYS = frozenset({"name", "topology", "rules", "packets"})
+_CASE_KEYS = frozenset({"name", "topology", "rules", "packets", "network"})
 _VALID_VERDICTS = frozenset({"ACCEPT", "DROP", "REJECT"})
 
 
@@ -124,7 +125,7 @@ def reduce_verdicts(events: Iterable[TraceEvent]) -> list[str]:
     reached_user_ruleset: set[str] = set()
 
     for evt in events:
-        if evt.type == "error" or not evt.trace_id:
+        if evt.type == "error" or not evt.trace_id or evt.packet_role in ("response", "background"):
             continue
         if evt.trace_id not in verdicts:
             verdicts[evt.trace_id] = []
@@ -173,6 +174,12 @@ def build_case(raw: dict[str, Any], index: int) -> tuple[str, TestRequest, list[
     if topology_str not in ("simple", "gateway"):
         raise SuiteConfigError(f"{name}: unknown topology {topology_str!r} (simple|gateway)")
     topology = TopologyType.GATEWAY if topology_str == "gateway" else TopologyType.SIMPLE
+    try:
+        network = (
+            GatewayNetwork if topology == TopologyType.GATEWAY else SimpleNetwork
+        ).model_validate(raw.get("network") if raw.get("network") is not None else {})
+    except ValidationError as exc:
+        raise SuiteConfigError(f"{name}: invalid network configuration:\n{exc}") from exc
 
     packets_data = raw.get("packets") or []
     if not packets_data:
@@ -202,8 +209,10 @@ def build_case(raw: dict[str, Any], index: int) -> tuple[str, TestRequest, list[
         # about what the oracle can actually tell apart.
         expected.append("DROP" if verdict == "REJECT" else verdict)
 
-        default_src = "10.0.1.1" if topology == TopologyType.GATEWAY else "10.0.0.1"
-        default_dst = "10.0.2.2" if topology == TopologyType.GATEWAY else "10.0.0.2"
+        default_src = network.host_v4.split("/")[0]
+        default_dst = (
+            network.server_v4 if isinstance(network, GatewayNetwork) else network.peer_v4
+        ).split("/")[0]
         try:
             packets.append(
                 PacketSpec(
@@ -219,7 +228,12 @@ def build_case(raw: dict[str, Any], index: int) -> tuple[str, TestRequest, list[
             raise SuiteConfigError(f"{name}: packet {pkt_index} is invalid:\n{exc}") from exc
 
     try:
-        request = TestRequest(rules=raw.get("rules", ""), packets=packets, topology=topology)
+        request = TestRequest(
+            rules=raw.get("rules", ""),
+            packets=packets,
+            topology=topology,
+            network=raw.get("network"),
+        )
     except ValidationError as exc:
         raise SuiteConfigError(f"{name}: invalid test request:\n{exc}") from exc
 

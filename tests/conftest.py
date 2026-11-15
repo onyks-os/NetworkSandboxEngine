@@ -24,6 +24,9 @@ def resource_kernel(monkeypatch: pytest.MonkeyPatch) -> None:
     they must not use this fixture.
     """
     monkeypatch.setattr(NetworkResources, "identity", lambda self, name: (1, 1))
+    monkeypatch.setattr(NetworkResources, "namespace_exists", lambda self, name: False)
+    monkeypatch.setattr(NetworkResources, "links", lambda self, name: [])
+    monkeypatch.setattr(NetworkResources, "routes", lambda self, version: [])
     monkeypatch.setattr(NetworkResources, "unmarked", lambda self: [])
 
     def inspect(self: NetworkResources, resource: Resource, marker: str) -> Inspection:

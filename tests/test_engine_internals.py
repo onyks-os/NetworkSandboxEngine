@@ -27,6 +27,7 @@ from nse.core.naming import (
     NETNS_SWEEP_PREFIXES,
     VETH_SWEEP_PREFIXES,
     derive_names,
+    interface_suffix,
 )
 from nse.core.netns_controller import NetnsController, _run
 from nse.core.paths import resolve
@@ -62,8 +63,8 @@ def test_derive_names_layout() -> None:
     assert names.netns == "nse_abc123def456"
     assert names.router_ns == "nsr_abc123def456"
     assert names.server_ns == "nss_abc123def456"
-    assert names.veth_host == "vhr-abc123de"
-    assert names.veth_router_host == "vrh-abc123de"
+    assert names.veth_host == f"vhr-{interface_suffix('abc123def456')}"
+    assert names.veth_router_host == f"vrh-{interface_suffix('abc123def456')}"
 
 
 def test_veth_names_fit_the_kernel_limit() -> None:
@@ -569,6 +570,26 @@ async def test_sandbox_inject_packet_defaults_ipv4_source() -> None:
         sandbox = NamespaceSandbox(MagicMock(), "nse_x")
         await sandbox.inject_packet("tcp", 80, "10.0.1.2")
     assert injector.inject.call_args[0][0].src_ip == "10.0.1.1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_nsenter", [False, True])
+async def test_sandbox_inject_packet_propagates_the_controller_nsenter_choice(
+    use_nsenter: bool,
+) -> None:
+    """Regression: the helper used to build its injector with the default, breaking containers."""
+    from nse.core.netns_controller import NamespaceSandbox
+
+    built: list[dict[str, object]] = []
+
+    def factory(*args: object, **kwargs: object) -> MagicMock:
+        built.append(kwargs)
+        return MagicMock()
+
+    with patch("nse.core.scapy_injector.ScapyInjector", factory):
+        sandbox = NamespaceSandbox(MagicMock(use_nsenter=use_nsenter), "nse_x")
+        await sandbox.inject_packet("udp", 53, "10.0.1.2")
+    assert built == [{"use_nsenter": use_nsenter}]
 
 
 def _async_return(value: object):  # type: ignore[no-untyped-def]

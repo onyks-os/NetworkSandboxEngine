@@ -45,7 +45,7 @@ import os
 import re
 import time
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypedDict
 
 from nse.core.paths import resolve
 
@@ -140,6 +140,8 @@ class TraceHarvester:
         self._task: asyncio.Task[None] | None = None
         self._ready_event = asyncio.Event()
         self._event_signal = asyncio.Event()
+        self._event_predicate: Callable[[TraceEvent], bool] | None = None
+        self.matched_trace_ids: set[str] = set()
         self._stop_requested = False
         self._deadline: float = 0.0
 
@@ -190,9 +192,11 @@ class TraceHarvester:
         except asyncio.TimeoutError:
             return False
 
-    def arm_event_signal(self) -> None:
+    def arm_event_signal(self, predicate: Callable[[TraceEvent], bool] | None = None) -> None:
         """Clear the event signal so the next :meth:`wait_for_event` waits for a *new* event."""
         self._event_signal.clear()
+        self._event_predicate = predicate
+        self.matched_trace_ids.clear()
 
     def extend_deadline(self, seconds: float) -> None:
         """
@@ -306,10 +310,13 @@ class TraceHarvester:
                 logger.debug("TraceEvent: %s", event)
                 if event.trace_id and event.trace_id not in self.seen_trace_ids:
                     self.seen_trace_ids.append(event.trace_id)
-                await queue.put(event)
-                self._event_signal.set()
                 if on_event is not None:
                     on_event(event)
+                await queue.put(event)
+                if self._event_predicate is None or self._event_predicate(event):
+                    if event.trace_id:
+                        self.matched_trace_ids.add(event.trace_id)
+                    self._event_signal.set()
 
         except asyncio.CancelledError:
             self.state = HarvestState.STOPPED
@@ -432,6 +439,8 @@ def _parse_line(line: str) -> TraceEvent | None:
             table=_unquote(m.group("table")),
             chain=_unquote(m.group("chain")),
             hook=m.group("iif") or "",
+            raw_message=line,
+            **_packet_fields(line),
             timestamp=now,
         )
 
@@ -463,3 +472,34 @@ def _parse_line(line: str) -> TraceEvent | None:
         )
 
     return None
+
+
+class _PacketFields(TypedDict):
+    packet_src_ip: str | None
+    packet_dst_ip: str | None
+    packet_protocol: str | None
+    packet_src_port: int | None
+    packet_dst_port: int | None
+
+
+def _packet_fields(line: str) -> _PacketFields:
+    fields = {
+        (layer, key): value
+        for layer, key, value in re.findall(
+            r"\b(ip6?|tcp|udp|icmp(?:v6)?) (saddr|daddr|sport|dport|type) (\S+)", line
+        )
+    }
+    network = "ip6" if ("ip6", "saddr") in fields else "ip"
+    protocol = next(
+        (p for p in ("tcp", "udp", "icmp", "icmpv6") if any(layer == p for layer, _ in fields)),
+        None,
+    )
+    sport = fields.get((protocol, "sport")) if protocol else None
+    dport = fields.get((protocol, "dport")) if protocol else None
+    return {
+        "packet_src_ip": fields.get((network, "saddr")),
+        "packet_dst_ip": fields.get((network, "daddr")),
+        "packet_protocol": "icmp" if protocol == "icmpv6" else protocol,
+        "packet_src_port": int(sport) if sport else None,
+        "packet_dst_port": int(dport) if dport else None,
+    }

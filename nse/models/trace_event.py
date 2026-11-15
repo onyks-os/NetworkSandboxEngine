@@ -58,6 +58,15 @@ class TraceEvent(BaseModel):
         default=None,
         description="Unix timestamp of the event (seconds).",
     )
+    packet_src_ip: str | None = None
+    packet_dst_ip: str | None = None
+    packet_protocol: str | None = None
+    packet_src_port: int | None = None
+    packet_dst_port: int | None = None
+    packet_role: Literal["stimulus", "response", "background"] | None = Field(
+        default=None,
+        description="Pipeline attribution from the first packet tuple of a trace; raw events are retained.",
+    )
     # Conntrack table state fields
     ct_proto: str | None = Field(default=None, description="Conntrack layer 4 protocol.")
     ct_state: str | None = Field(default=None, description="Conntrack connection state.")

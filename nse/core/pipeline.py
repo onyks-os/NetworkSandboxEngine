@@ -35,19 +35,19 @@ import subprocess
 import uuid
 from typing import Any, cast
 
+from nse.core.async_work import finish_work, run_blocking
 from nse.core.mock_listener import start_mock_listener
 from nse.core.naming import derive_names
 from nse.core.netns_controller import NetnsController, TestRun
 from nse.core.paths import resolve
 from nse.core.rule_engine import RuleEngine, RuleValidationError
 from nse.core.scapy_injector import ScapyInjector
+from nse.core.trace_attribution import TraceAttribution, packet_matches
 from nse.core.trace_harvester import TraceHarvester
 from nse.models.test_request import PacketSpec, TestRequest, TopologyType
 from nse.models.trace_event import TraceEvent
 
 logger = logging.getLogger("nse.core.pipeline")
-
-_VETH_PEER = "veth-nse"  # lives inside the netns
 
 #: Seconds of inactivity the trace monitor tolerates before declaring a timeout.
 #: The deadline is *extended* by this much after every injection, so a long
@@ -192,20 +192,12 @@ async def _probe_oracle(
     False if no canary was ever seen, meaning the oracle is blind and nothing it
     says about the test packets can be trusted.
     """
-    loop = asyncio.get_running_loop()
     for attempt in range(1, attempts + 1):
-        harvester.arm_event_signal()
+        harvester.arm_event_signal(lambda event: packet_matches(event, spec))
         harvester.extend_deadline(_TRACE_IDLE_TIMEOUT)
         try:
-            await loop.run_in_executor(
-                None,
-                lambda: injector.inject(
-                    spec,
-                    target_netns,
-                    veth_host,
-                    veth_peer,
-                    host_netns,
-                ),
+            await run_blocking(
+                injector.inject, spec, target_netns, veth_host, veth_peer, host_netns
             )
         except Exception as exc:
             logger.debug("%s canary injection attempt %d failed: %s", label, attempt, exc)
@@ -277,18 +269,17 @@ async def run_test_pipeline(
     server_ns = names.server_ns
     veth_host = names.veth_host
     veth_router_host = names.veth_router_host
-    veth_router_server = names.veth_router_server
-    veth_server = names.veth_server
 
     is_gateway = req.topology == TopologyType.GATEWAY
     listeners = []
     harvester = TraceHarvester()
     engine = RuleEngine(use_nsenter=controller.use_nsenter)
     injector = ScapyInjector(use_nsenter=controller.use_nsenter)
+    attribution = TraceAttribution(req.packets)
 
-    loop = asyncio.get_running_loop()
+    ownership_id = uuid.uuid4().hex
     target_netns = router_ns if is_gateway else netns
-    veth_peer_target = veth_router_host if is_gateway else _VETH_PEER
+    veth_peer_target = veth_router_host
     # The "host" end of the injection link is in the root namespace for both
     # topologies; the router namespace only owns the peer end.
     host_netns: str | None = None
@@ -297,28 +288,7 @@ async def run_test_pipeline(
         # ------------------------------------------------------------------
         # 1. Setup Network Topology
         # ------------------------------------------------------------------
-        if is_gateway:
-            logger.info("[%s] Setting up Gateway topology: netns=%s", run.test_id, router_ns)
-            await loop.run_in_executor(
-                None,
-                controller.create_gateway_topology,
-                router_ns,
-                server_ns,
-                veth_host,
-                veth_router_host,
-                veth_router_server,
-                veth_server,
-            )
-        else:
-            logger.info("[%s] Setting up Simple topology: netns=%s", run.test_id, netns)
-            await loop.run_in_executor(None, controller.create_netns, netns)
-            await loop.run_in_executor(
-                None,
-                controller.create_veth_pair,
-                netns,
-                veth_host,
-                _VETH_PEER,
-            )
+        await run_blocking(controller._setup_topology, names, req, ownership_id)
 
         # ------------------------------------------------------------------
         # 2. Spawning background mock listeners inside server/sandbox namespace
@@ -342,7 +312,7 @@ async def run_test_pipeline(
         # 3. Load nftables Rules
         # ------------------------------------------------------------------
         logger.info("[%s] Loading nftables rules into netns %s", run.test_id, target_netns)
-        await loop.run_in_executor(None, engine.load, req.rules, target_netns)
+        await run_blocking(engine.load, req.rules, target_netns)
 
         # ------------------------------------------------------------------
         # 4. Start nft monitor trace
@@ -350,6 +320,7 @@ async def run_test_pipeline(
         logger.info("[%s] Starting nft monitor trace", run.test_id)
 
         def on_trace_event(evt: TraceEvent) -> None:
+            attribution.observe(evt)
             collected_events.append(evt)
 
         initial_timeout = max(
@@ -389,7 +360,7 @@ async def run_test_pipeline(
             )
             await emit_event(None)
             return _without_canaries(collected_events, canary_trace_ids)
-        canary_trace_ids.update(harvester.seen_trace_ids)
+        canary_trace_ids.update(harvester.matched_trace_ids)
 
         # ------------------------------------------------------------------
         # 6. Inject Packet Sequence (Per-packet ordering-based injection)
@@ -405,8 +376,7 @@ async def run_test_pipeline(
                 pkt.dst_port,
             )
             harvester.extend_deadline(_TRACE_IDLE_TIMEOUT)
-            await loop.run_in_executor(
-                None,
+            await run_blocking(
                 injector.inject,
                 pkt,
                 target_netns,
@@ -423,21 +393,18 @@ async def run_test_pipeline(
         # 7. Liveness canary — prove the oracle was STILL seeing at the end
         # ------------------------------------------------------------------
         logger.info("[%s] Probing the oracle with a liveness canary", run.test_id)
-        before_liveness = set(harvester.seen_trace_ids)
         if not await _probe_oracle(label="liveness", **probe_kwargs):  # type: ignore[arg-type]
             await emit_oracle_error(
                 "liveness canary was never observed - the trace monitor stopped "
                 "reporting before the run finished, so the verdict stream is "
                 "truncated by an unknown amount"
             )
-        canary_trace_ids.update(set(harvester.seen_trace_ids) - before_liveness)
+        canary_trace_ids.update(harvester.matched_trace_ids)
 
         # ------------------------------------------------------------------
         # 8. Collect conntrack entries & finish
         # ------------------------------------------------------------------
-        ct_entries = await loop.run_in_executor(
-            None, read_conntrack_table, target_netns, controller.use_nsenter
-        )
+        ct_entries = await run_blocking(read_conntrack_table, target_netns, controller.use_nsenter)
         for ct in ct_entries:
             await emit_event(
                 TraceEvent(
@@ -457,6 +424,10 @@ async def run_test_pipeline(
         if run.status != "error":
             run.status = "done"
             logger.info("[%s] Test pipeline finished successfully", run.test_id)
+
+    except asyncio.CancelledError:
+        run.status = "error"
+        raise
 
     except RuleValidationError as exc:
         logger.warning("[%s] Rule validation error: %s", run.test_id, exc)
@@ -487,33 +458,24 @@ async def run_test_pipeline(
         await harvester.aclose()
 
     finally:
-        # ------------------------------------------------------------------
-        # Teardown mock listeners
-        # ------------------------------------------------------------------
-        logger.info("[%s] Tearing down mock listeners", run.test_id)
-        for listener in listeners:
-            listener_proc: subprocess.Popen[str] = cast(subprocess.Popen[str], listener["proc"])
+
+        async def teardown() -> None:
             try:
-                listener_proc.terminate()
-                listener_proc.wait(timeout=0.5)
-            except (OSError, subprocess.SubprocessError):
-                with contextlib.suppress(OSError, subprocess.SubprocessError):
-                    listener_proc.kill()
+                await harvester.aclose()
+            finally:
+                for listener in listeners:
+                    proc = cast(subprocess.Popen[str], listener["proc"])
+                    try:
+                        proc.terminate()
+                        proc.wait(timeout=0.5)
+                    except (OSError, subprocess.SubprocessError):
+                        with contextlib.suppress(OSError, subprocess.SubprocessError):
+                            proc.kill()
+                            proc.wait(timeout=0.5)
+                # Only this invocation's random ownership ID can be discharged.
+                await run_blocking(controller._cleanup_run, ownership_id)
 
-        # ------------------------------------------------------------------
-        # Teardown namespaces & host interfaces (blocking → executor)
-        # ------------------------------------------------------------------
-        logger.info("[%s] Tearing down network topology", run.test_id)
-
-        if is_gateway:
-            await loop.run_in_executor(None, controller.destroy_netns, router_ns)
-            await loop.run_in_executor(None, controller.destroy_netns, server_ns)
-        else:
-            await loop.run_in_executor(None, controller.destroy_netns, netns)
-
-        # Namespace teardown removes only the controller's registered links.
-        # Never delete a prefix/name match directly: a failed setup may have
-        # encountered a resource owned by another experiment.
+        await finish_work(teardown())
 
     return _without_canaries(collected_events, canary_trace_ids)
 

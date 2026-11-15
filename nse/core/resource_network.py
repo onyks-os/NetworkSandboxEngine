@@ -25,6 +25,11 @@ class LinkInfo(BaseModel):
     link_index: int | None = None
 
 
+class RouteInfo(BaseModel):
+    dst: str | None = None
+    dev: str | None = None
+
+
 @dataclass(frozen=True)
 class Inspection:
     status: Literal["owned", "missing", "foreign"]
@@ -46,6 +51,9 @@ class NetworkResources:
     def identity(self, netns: str | None) -> tuple[int, int] | None:
         return namespace_identity(netns)
 
+    def namespace_exists(self, netns: str) -> bool:
+        return self.identity(netns) is not None
+
     def links(self, netns: str | None) -> list[LinkInfo]:
         result = subprocess.run(
             [*self.prefix(netns), resolve("ip"), "-j", "link", "show"],
@@ -55,6 +63,16 @@ class NetworkResources:
             timeout=5.0,
         )
         return TypeAdapter(list[LinkInfo]).validate_json(result.stdout)
+
+    def routes(self, version: int) -> list[RouteInfo]:
+        result = subprocess.run(
+            [resolve("ip"), "-j", f"-{version}", "route", "show", "table", "all"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5.0,
+        )
+        return TypeAdapter(list[RouteInfo]).validate_json(result.stdout)
 
     def inspect(self, resource: Resource, marker: str) -> Inspection:
         if resource.kind == "namespace":
