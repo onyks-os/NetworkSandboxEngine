@@ -55,6 +55,9 @@ Exported from the package root as `nse.PCAPAsserter`. Note `DEFAULT_FILTER`: it
 suppresses ARP and ICMPv6 Neighbour Discovery only, and it is compiled into BPF,
 so anything it excludes never reaches userspace.
 
+`stop_report()` returns the `CaptureReport` documented below; `stop()` keeps
+returning `list[Packet]` and raises `CaptureError` for an unhealthy capture.
+
 ::: nse.core.sniffer
     options:
       show_root_heading: true
@@ -70,6 +73,16 @@ so anything it excludes never reaches userspace.
       show_source: true
 
 ::: nse.models.trace_event
+    options:
+      show_root_heading: true
+      show_source: true
+
+::: nse.models.network_config
+    options:
+      show_root_heading: true
+      show_source: true
+
+::: nse.models.capture_report
     options:
       show_root_heading: true
       show_source: true

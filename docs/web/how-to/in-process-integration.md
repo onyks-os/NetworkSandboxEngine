@@ -154,11 +154,60 @@ that half.
 from nse import PCAPAsserter
 
 asserter = PCAPAsserter(iface="veth-host")
-await asserter.start()
-# ... drive the stimulus ...
+await asserter.start()  # returns once the kernel socket is filtering and bound
+# ... drive the stimulus: no sleep needed before it ...
 leaked = await asserter.stop()
 assert not leaked, f"{len(leaked)} frame(s) escaped: {leaked}"
 ```
+
+### Readiness and failures
+
+`await start()` returns only when the packet socket exists, carries its BPF
+filter and is bound to the interface. From that moment every matching packet is
+queued for the capture, so the stimulus may follow immediately; the
+`asyncio.sleep()` that older code put after `start()` is no longer needed.
+`stop()` drains whatever the kernel has already queued before closing, so a
+packet that reached the interface before `stop()` is not lost. A packet still in
+flight (for example, queued in another namespace) is not yet on the interface:
+wait for an observable effect of the stimulus, such as its arrival at a
+receiver, rather than a fixed delay.
+
+`start()` raises `CaptureStartError` when the capture cannot be armed. Its
+`reason` is `interface_missing`, `filter_invalid`, `permission_denied`,
+`backend_unavailable` (libpcap missing), `backend_error`, `timeout` (see the
+optional `timeout` argument) or `cancelled`, and no thread or socket is left
+behind. A filter that does not compile is always an error. Scapy before 2.6
+would log it and capture **unfiltered**; NSE compiles the filter itself first.
+
+`stop()` still returns `list[Packet]`, but raises `CaptureError` when the
+instrument was not healthy: the backend crashed (for example, the interface
+was deleted), the loop did not stop in time, or start had failed. An empty list
+now only ever means *a working capture saw nothing*. Calling `stop()` before
+`start()`, or `start()` twice, raises `CaptureStateError`. A capture is single
+use; `stop()` and `stop_report()` may be called repeatedly and in any order.
+
+### The capture report
+
+`stop_report()` stops the capture (once) and returns a `CaptureReport` instead
+of raising:
+
+```python
+report = await asserter.stop_report()
+report.instrument_healthy   # armed, ran until asked to stop, no backend error
+report.window_complete      # True / False / None (unknown: counters unavailable)
+report.termination          # "stopped", "start_failed", "backend_terminated", ...
+report.kernel_drops         # PACKET_STATISTICS drops, or None - never a guessed 0
+report.effective_filter     # the BPF expression actually attached
+report.model_dump_json()    # for CI artefacts
+```
+
+The report separates three questions. **Instrument health** says whether the
+capture worked. **Window completeness** says whether every matching packet
+between readiness and stop was read: the kernel's drop counter is zero and
+nothing remained unread. When the counters are unavailable this is `None`, not
+`True`. **Evidence sufficiency** is not in the report at all. A healthy, complete
+capture of an empty interface still does not prove that your stimulus took that
+path, which is why the positive control below is still required.
 
 ### Always pair it with a positive control
 

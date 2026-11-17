@@ -19,14 +19,14 @@ archived in 2.1.0; it remains in git history at tag `v2.0.0`.
 NetworkSandboxEngine/
 |
 |-- nse/                        # PyPI wheel (only this directory is packaged)
-|   |-- __init__.py             # Public API: NetnsController, PCAPAsserter, __version__
+|   |-- __init__.py             # Public API: NetnsController, PCAPAsserter, CaptureReport, Capture*Error
 |   |-- core/
 |   |   |-- naming.py           # Uniform netns/veth derive_names() and sweep rules
 |   |   |-- netns_controller.py # Namespace lifecycle, veth wiring, and startup sweep
 |   |   |-- resource_registry.py # Private journals, owner leases and coordinated recovery
 |   |   |-- resource_network.py # Kernel identity and ownership marker verification
 |   |   |-- scapy_injector.py   # L2/L3 packet forging and injection
-|   |   |-- sniffer.py          # PCAPAsserter (AsyncSniffer wrapper)
+|   |   |-- sniffer.py          # PCAPAsserter (confirmed-ready capture over L2ListenSocket)
 |   |   |-- pipeline.py         # run_test_pipeline() orchestrator
 |   |   |-- rule_engine.py      # nft load / validate / trace-arm
 |   |   |-- trace_harvester.py  # nft monitor trace parser and readiness probe

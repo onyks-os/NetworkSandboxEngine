@@ -399,21 +399,7 @@ async def test_create_namespace_lifecycle_mocked(
     controller._cleanup_run.assert_called_once()
 
 
-@patch("scapy.all.AsyncSniffer")
-@pytest.mark.asyncio
-async def test_pcap_asserter_mocked(mock_sniffer_cls: MagicMock) -> None:
-    mock_sniffer = MagicMock()
-    mock_sniffer_cls.return_value = mock_sniffer
-
-    asserter = PCAPAsserter(iface="vhr-mock", filter="port 80")
-    assert "port 80" in asserter.filter
-
-    await asserter.start()
-    assert mock_sniffer.start.called
-
-    mock_sniffer.stop.return_value = ["packet1", "packet2"]
-    captured = await asserter.stop()
-    assert captured == ["packet1", "packet2"]
+# PCAPAsserter unit tests live in tests/test_sniffer.py.
 
 
 # ===========================================================================

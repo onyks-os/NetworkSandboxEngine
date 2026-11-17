@@ -7,7 +7,8 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _version
 
 from .core.netns_controller import NetnsController
-from .core.sniffer import PCAPAsserter
+from .core.sniffer import CaptureError, CaptureStartError, CaptureStateError, PCAPAsserter
+from .models.capture_report import CaptureReport
 
 try:
     # Read the version from installed metadata rather than restating it here.
@@ -17,4 +18,12 @@ try:
 except PackageNotFoundError:  # pragma: no cover - running from a bare checkout
     __version__ = "0.0.0.dev0"
 
-__all__ = ["NetnsController", "PCAPAsserter", "__version__"]
+__all__ = [
+    "CaptureError",
+    "CaptureReport",
+    "CaptureStartError",
+    "CaptureStateError",
+    "NetnsController",
+    "PCAPAsserter",
+    "__version__",
+]

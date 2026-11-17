@@ -1,6 +1,6 @@
 # NSE v2.2.0 — piano di lavoro
 
-Stato: fasi 0, 1 e 2 completate; prossima fase 3. Aggiornato: 15 novembre 2026.
+Stato: fasi 0–3 completate; prossima fase 4. Aggiornato: 16 novembre 2026.
 
 Obiettivo: rendere verificabili proprietà delle risorse, disponibilità degli
 osservatori e completezza dei risultati, mantenendo il motore piccolo e le API
@@ -155,29 +155,35 @@ Esito: completata il 15 novembre 2026; dettagli e verifiche in
 
 ## 3. Disponibilità della cattura e rapporto diagnostico
 
-- [ ] Fare terminare `await start()` dopo `started_callback`, collegando il thread
+- [x] Fare terminare `await start()` dopo `started_callback`, collegando il thread
   Scapy all'event loop in modo sicuro. Aggiungere timeout configurabile tramite
   parametro opzionale e distinguere timeout, errore BPF, interfaccia assente e
   crash del backend. Pulire anche dopo cancellazione o errore all'avvio.
-- [ ] Definire stati e transizioni, inclusi doppio avvio, stop prima dell'avvio,
+- [x] Definire stati e transizioni, inclusi doppio avvio, stop prima dell'avvio,
   stop ripetuto e alternanza di `stop()`/`stop_report()`. Una sola finalizzazione
   deve alimentare entrambi i metodi senza perdere il risultato.
-- [ ] Aggiungere `CaptureReport` e `stop_report()`: interfaccia, filtro richiesto
+- [x] Aggiungere `CaptureReport` e `stop_report()`: interfaccia, filtro richiesto
   ed effettivo, backend, conferma e tempi di avvio/fine, causa della terminazione,
   pacchetti/byte osservati, conservati e scritti, errori e percorsi degli artefatti.
-- [ ] Distinguere salute dello strumento, completezza dell'intervallo osservato e
+- [x] Distinguere salute dello strumento, completezza dell'intervallo osservato e
   sufficienza delle prove per il test. Le statistiche di perdita non disponibili
   devono avere valore sconosciuto e motivazione, mai zero inventato.
-- [ ] Conservare `stop() -> list[Packet]` e le regole di composizione del filtro.
+- [x] Conservare `stop() -> list[Packet]` e le regole di composizione del filtro.
   Un fallimento di acquisizione deve emergere anche nell'API storica mediante
   errore esplicito, evitando una lista vuota che sembra un successo.
-- [ ] Tenere separata la readiness tecnica dai controlli positivi sul percorso
+- [x] Tenere separata la readiness tecnica dai controlli positivi sul percorso
   del traffico; il rapporto non certifica automaticamente un'asserzione negativa.
 
 Completamento: invio immediato dopo `await start()` osservato senza sleep
 arbitrari; errore all'avvio/fine distinguibile da zero pacchetti; stop entro una
 scadenza anche senza traffico; nessun thread o socket residuo nei casi coperti.
 Backend disponibile e versione minima supportata sono verificati in integrazione.
+
+Esito: completata il 16 novembre 2026; dettagli e verifiche in
+[PHASE3-v2.2.0.md](PHASE3-v2.2.0.md). Al posto di `started_callback` di
+`AsyncSniffer` si usa un thread NSE su `L2ListenSocket`: la readiness è più
+forte (socket filtrato e legato) e il comportamento non dipende dalla versione
+di Scapy.
 
 ## 4. Argomenti strutturati
 

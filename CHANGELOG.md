@@ -47,6 +47,9 @@ minor release under Semantic Versioning. See `docs/PLAN-v2.2.0.md`.
   unchanged.
 - `NamespaceSandbox.inject_packet()` now honours the controller's `use_nsenter`
   choice, fixing injection in containers.
+- A capture filter that fails to compile (invalid expression or libpcap missing)
+  now fails `start()`. With Scapy < 2.6 it was logged and the socket opened
+  **unfiltered**.
 
 ### Added
 
@@ -55,6 +58,31 @@ minor release under Semantic Versioning. See `docs/PLAN-v2.2.0.md`.
   can run side by side. Defaults are unchanged.
 - `TraceEvent` fields `packet_src_ip`, `packet_dst_ip`, `packet_protocol`,
   `packet_src_port`, `packet_dst_port` and `packet_role`.
+- `PCAPAsserter.stop_report()` and `nse.CaptureReport`: interface, requested and
+  effective filter, backend and version, timestamps, termination cause, packets
+  and bytes observed/stored, kernel `PACKET_STATISTICS` packets and drops (or
+  `None` with a reason, never an invented zero), errors, and the derived
+  `instrument_healthy` / `window_complete` verdicts.
+- `PCAPAsserter.start(timeout=...)` and `stop(timeout=...)`, plus
+  `nse.CaptureError`, `nse.CaptureStartError` (classified `reason`) and
+  `nse.CaptureStateError`.
+
+### Changed
+
+- **`PCAPAsserter.start()` now returns only when capture is ready.** The kernel
+  socket is filtering and bound when it returns, so a stimulus may be sent
+  immediately; the `sleep()` that callers added after `start()` is no longer
+  needed. The
+  capture loop is NSE's own thread over Scapy's `L2ListenSocket` instead of
+  `AsyncSniffer`, and `stop()` drains packets the kernel already queued instead
+  of discarding them.
+- **Capture failures are errors.** `start()` raises `CaptureStartError` instead of
+  succeeding and failing later; `stop()` keeps returning `list[Packet]` but
+  raises `CaptureError` when the instrument was unhealthy (start failure, backend
+  crash such as a deleted interface, stop timeout). Kernel drops are logged and
+  reported, not raised. Calling `start()` twice, or `stop()` before `start()`,
+  raises `CaptureStateError` (previously a silent no-op returning `[]`). Scapy is
+  now imported at `start()`, not in the constructor.
 
 ### Maintenance
 
