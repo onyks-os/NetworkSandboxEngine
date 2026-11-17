@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import subprocess
 import time
 import uuid
@@ -48,6 +49,30 @@ class TestRun:
     )
 
 
+def _validate_argv(argv: Sequence[str | os.PathLike[str]]) -> list[str]:
+    """Return *argv* as a list of ``str`` or explain, before any process starts, why not."""
+    if isinstance(argv, (str, bytes, bytearray)) or not isinstance(argv, Sequence):
+        raise TypeError(
+            "argv must be a sequence of arguments, not a single string; "
+            "use exec() for a whitespace-split command"
+        )
+    arguments: list[str] = []
+    for index, raw in enumerate(argv):
+        value = os.fspath(raw) if isinstance(raw, os.PathLike) else raw
+        if not isinstance(value, str):
+            raise TypeError(
+                f"argv[{index}] must be str or os.PathLike[str], got {type(value).__name__}"
+            )
+        if "\0" in value:
+            raise ValueError(
+                f"argv[{index}] contains a NUL character, which no process can receive"
+            )
+        arguments.append(value)
+    if not arguments or not arguments[0]:
+        raise ValueError("argv must start with a non-empty program name")
+    return arguments
+
+
 class NamespaceSandbox:
     """
     Represents an active isolated network namespace sandbox.
@@ -65,15 +90,53 @@ class NamespaceSandbox:
 
     async def exec(self, command: str) -> subprocess.CompletedProcess[bytes]:
         """
-        Execute a shell command inside the network namespace context asynchronously.
+        Run *command* inside the namespace, split on whitespace with ``str.split()``.
+
+        No shell is involved: quotes, escapes, globs, pipes, redirections and
+        variables are **not** interpreted, and an argument cannot contain a space.
+        ``exec('python3 -c "print(1)"')`` passes ``'"print(1)"'`` with its quote
+        characters. Use :meth:`exec_argv` to pass each argument exactly.
+
+        Returns ``CompletedProcess[bytes]`` with ``args`` set to the full command
+        (namespace prefix included); raises ``subprocess.CalledProcessError``
+        carrying stdout/stderr on a non-zero exit.
         """
-        cmd = self.controller.exec_prefix(self.name) + command.split()
+        return await self._run(command.split())
+
+    async def exec_argv(
+        self, argv: Sequence[str | os.PathLike[str]]
+    ) -> subprocess.CompletedProcess[bytes]:
+        """
+        Run a program inside the namespace with exactly the given arguments.
+
+        Each element of *argv* reaches the process as one argument, unchanged:
+        spaces, quotes, empty strings, Unicode and shell metacharacters are
+        literal, because no shell or splitting is involved. ``argv[0]`` is the
+        program, looked up on the namespace process's ``PATH`` unless it is a path.
+
+        Result and errors are those of :meth:`exec`. Raises ``TypeError`` for a
+        bare string or a non-``str`` element and ``ValueError`` for an empty
+        program name or an argument containing NUL, before anything is started.
+        """
+        return await self._run(_validate_argv(argv))
+
+    async def _run(self, argv: list[str]) -> subprocess.CompletedProcess[bytes]:
+        cmd = self.controller.exec_prefix(self.name) + argv
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await proc.communicate()
+        try:
+            stdout, stderr = await proc.communicate()
+        except asyncio.CancelledError:
+            # Do not leave the child running unobserved. Its own children are
+            # managed in a later release (application process lifecycle).
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            with contextlib.suppress(asyncio.CancelledError):
+                await asyncio.shield(proc.wait())
+            raise
         returncode = proc.returncode if proc.returncode is not None else 1
         if returncode != 0:
             raise subprocess.CalledProcessError(
@@ -431,9 +494,17 @@ class NetnsController:
             except BaseException:
                 # Live rollback has the successful exclusive creation and its
                 # inode as evidence. Crash recovery still requires the marker.
+                try:
+                    unclaimed = all(not link.ifalias for link in self._resources.links(name))
+                except Exception:
+                    # Entering the namespace is what failed (e.g. `ip netns exec`
+                    # in some containers). The exclusive creation under the
+                    # registry lock and the unchanged inode remain the evidence;
+                    # the original error, not this one, is re-raised below.
+                    unclaimed = True
                 if (
                     self._resources.identity(name) == entry.identity
-                    and all(not link.ifalias for link in self._resources.links(name))
+                    and unclaimed
                     and self._delete_namespace(name)
                 ):
                     journal.discard(entry)

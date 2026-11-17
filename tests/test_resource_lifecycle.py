@@ -219,3 +219,27 @@ def test_failed_pipeline_cannot_delete_another_runs_host_link() -> None:
     finally:
         first.cleanup_all()
         second.cleanup_all()
+
+
+def test_real_namespace_that_cannot_be_entered_is_rolled_back(
+    runtime_registry: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failing namespace entry (as `ip netns exec` in some containers) leaves no namespace."""
+    import shutil
+
+    false = shutil.which("false")
+    assert false is not None
+    monkeypatch.setattr(NetnsController, "exec_prefix", lambda self, name: [false])
+    monkeypatch.setattr(
+        NetworkResources, "prefix", lambda self, netns: [] if netns is None else [false]
+    )
+    controller = NetnsController(use_nsenter=False)
+    try:
+        with pytest.raises(subprocess.CalledProcessError) as caught:
+            controller.create_netns("nse_noentry")
+        assert "alias" in caught.value.cmd
+        assert not Path("/var/run/netns/nse_noentry").exists()
+    finally:
+        controller.cleanup_all()
+        if Path("/var/run/netns/nse_noentry").exists():
+            subprocess.run([resolve("ip"), "netns", "del", "nse_noentry"], check=False, timeout=5)

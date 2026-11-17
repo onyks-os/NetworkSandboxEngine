@@ -502,3 +502,37 @@ def test_legacy_inventory_is_diagnostic_only() -> None:
 
     with patch("subprocess.run", return_value=listing), patch.object(backend, "links", links):
         assert backend.unmarked() == ["nse_old", "vhr-old"]
+
+
+def test_live_rollback_removes_a_namespace_that_cannot_be_entered(
+    kernel: Kernel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Entering the namespace fails (e.g. `ip netns exec` inside some containers).
+
+    The marker cannot be applied and the namespace cannot be inspected from
+    inside. The exclusive `ip netns add` and the unchanged inode still prove this
+    controller created it moments ago, so a live rollback must remove it and
+    re-raise the original error rather than an inspection error.
+    """
+
+    def refuse_entry(command: list[str], timeout: float = 10.0) -> subprocess.CompletedProcess[str]:
+        if command[1:3] == ["netns", "exec"]:
+            raise subprocess.CalledProcessError(
+                255, command, stderr="mount --make-rslave /: Permission denied"
+            )
+        return kernel.run(command, timeout)
+
+    def links(self: NetworkResources, name: str | None) -> list[LinkInfo]:
+        if name is not None:
+            raise subprocess.CalledProcessError(255, ["ip", "netns", "exec", name], stderr="denied")
+        return kernel.links(name)
+
+    monkeypatch.setattr("nse.core.netns_controller._run", refuse_entry)
+    monkeypatch.setattr(NetworkResources, "links", links)
+    controller = NetnsController(use_nsenter=False)
+    with pytest.raises(subprocess.CalledProcessError) as caught:
+        controller.create_netns("nse_unenterable")
+    assert "alias" in caught.value.cmd  # the original failure, not the inspection's
+    assert "nse_unenterable" not in kernel.namespaces
+    assert not controller._registry.data.resources
+    controller._registry.close()

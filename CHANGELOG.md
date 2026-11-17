@@ -50,6 +50,13 @@ minor release under Semantic Versioning. See `docs/PLAN-v2.2.0.md`.
 - A capture filter that fails to compile (invalid expression or libpcap missing)
   now fails `start()`. With Scapy < 2.6 it was logged and the socket opened
   **unfiltered**.
+- A namespace whose creation fails because it cannot be entered (for example
+  `ip netns exec` inside some containers) is now rolled back. The failed
+  inspection used to replace the original error and leave the namespace behind.
+- `NamespaceSandbox.exec()` documented accurately: it splits on whitespace and
+  never uses a shell. Its behaviour is unchanged. Cancelling `exec()` or
+  `exec_argv()` now kills and reaps the started process instead of leaving it
+  running.
 
 ### Added
 
@@ -66,6 +73,9 @@ minor release under Semantic Versioning. See `docs/PLAN-v2.2.0.md`.
 - `PCAPAsserter.start(timeout=...)` and `stop(timeout=...)`, plus
   `nse.CaptureError`, `nse.CaptureStartError` (classified `reason`) and
   `nse.CaptureStateError`.
+- `NamespaceSandbox.exec_argv(argv)`: runs a program in the namespace with
+  exactly the given arguments (no shell, no splitting), validated before
+  anything starts. Same result and `CalledProcessError` contract as `exec()`.
 
 ### Changed
 

@@ -1,6 +1,6 @@
 # NSE v2.2.0 — piano di lavoro
 
-Stato: fasi 0–3 completate; prossima fase 4. Aggiornato: 16 novembre 2026.
+Stato: fasi 0–4 completate; prossima fase 5. Aggiornato: 17 novembre 2026.
 
 Obiettivo: rendere verificabili proprietà delle risorse, disponibilità degli
 osservatori e completezza dei risultati, mantenendo il motore piccolo e le API
@@ -187,15 +187,18 @@ di Scapy.
 
 ## 4. Argomenti strutturati
 
-- [ ] Aggiungere `NamespaceSandbox.exec_argv(argv)` con validazione degli argomenti
+- [x] Aggiungere `NamespaceSandbox.exec_argv(argv)` con validazione degli argomenti
   e la stessa forma di risultato `CompletedProcess[bytes]` e degli errori attuali.
-- [ ] Conservare `exec(command)` con la suddivisione storica; correggere la
+- [x] Conservare `exec(command)` con la suddivisione storica; correggere la
   docstring che parla di shell. Non introdurre shell o `shlex.split()` impliciti.
-- [ ] Centralizzare l'esecuzione e usare argv nei nuovi helper ed esempi.
+- [x] Centralizzare l'esecuzione e usare argv nei nuovi helper ed esempi.
 
 Completamento: spazi, virgolette, stringhe vuote, Unicode e metacaratteri arrivano
 al processo come argomenti letterali. Output, codice d'uscita e
 `CalledProcessError` dei chiamanti esistenti restano compatibili.
+
+Esito: completata il 17 novembre 2026; dettagli e verifiche in
+[PHASE4-v2.2.0.md](PHASE4-v2.2.0.md).
 
 ## 5. Catture prolungate con memoria limitata
 

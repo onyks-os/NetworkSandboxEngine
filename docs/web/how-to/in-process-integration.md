@@ -143,6 +143,38 @@ reported about your ruleset would have been fiction.
 
 ---
 
+## Running programs inside the namespace
+
+`NetnsController.create_namespace()` yields a sandbox whose `exec_argv()` runs a
+program inside the namespace with **exactly** the arguments you pass:
+
+```python
+async with controller.create_namespace("nse_app") as ns:
+    result = await ns.exec_argv(["python3", "-c", "print('ciao mondo')"])
+    assert result.stdout == b"ciao mondo\n"
+```
+
+Each list element reaches the process as one argument: spaces, quotes, empty
+strings, Unicode and shell metacharacters such as `$HOME`, `*` or `;` are passed
+literally, because no shell and no splitting is involved. A bare string, a
+non-`str` element, an empty program name or an argument containing NUL is
+rejected with `TypeError`/`ValueError` before anything starts.
+
+The older `exec(command)` is kept unchanged for existing callers. It splits the
+string on whitespace with `str.split()` and does **not** use a shell, so
+`exec('python3 -c "print(1)"')` passes the quote characters to Python and
+fails. Prefer `exec_argv()` for anything but the simplest commands.
+
+Both methods return `subprocess.CompletedProcess[bytes]` whose `args` include
+the namespace prefix, and raise `subprocess.CalledProcessError`, with stdout and
+stderr attached, on a non-zero exit. Cancelling the call kills and reaps the
+process it started. Its own child processes, identity (UID, GID, capabilities)
+and timeouts are not managed yet; that is planned for a later 2.2.0 phase. The
+process runs with NSE's privileges: entering a network namespace changes the
+visible network, not the user.
+
+---
+
 ## Asserting that nothing left the interface
 
 The trace oracle answers *what did the ruleset decide*. It cannot answer *what
