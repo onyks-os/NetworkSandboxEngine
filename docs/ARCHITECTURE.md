@@ -28,11 +28,15 @@ NetworkSandboxEngine/
 |   |   |-- resource_network.py # Kernel identity and ownership marker verification
 |   |   |-- scapy_injector.py   # L2/L3 packet forging and injection
 |   |   |-- sniffer.py          # PCAPAsserter (confirmed-ready capture, optional bounded PCAP output)
-|   |   |-- pipeline.py         # run_test_pipeline() orchestrator
+|   |   |-- pipeline.py         # One experiment, two entry points: run_test_pipeline() / _report()
+|   |   |-- environment.py      # Versions of NSE, Python, dependencies, kernel and tools
+|   |   |-- verdicts.py         # One verdict per stimulus, shared by the CLI and the report
 |   |   |-- rule_engine.py      # nft load / validate / trace-arm
 |   |   |-- trace_harvester.py  # nft monitor trace parser and readiness probe
 |   |   `-- mock_listener.py    # TCP/UDP echo daemons, started managed and confirmed bound
 |   |-- models/
+|   |   |-- artifacts.py        # ArtifactEntry, SHA-256 hashing, atomic report writes
+|   |   |-- experiment_report.py # ExperimentReport: input, environment, result, observations, run
 |   |   |-- process.py          # ProcessIdentity, EffectiveIdentity, ProcessResult
 |   |   |-- test_request.py     # PacketSpec, TestRequest, TopologyType
 |   |   `-- trace_event.py      # TraceEvent model
@@ -125,6 +129,10 @@ async def run_test_pipeline(
     run: TestRun | None = None,
 ) -> list[TraceEvent]
 ```
+
+`run_test_pipeline_report(..., timeout=None) -> ExperimentReport` runs the same
+experiment (`_execute`) and returns the full report instead of the event list;
+it records errors by stage instead of raising, and can stop a run at a deadline.
 
 Executing:
 

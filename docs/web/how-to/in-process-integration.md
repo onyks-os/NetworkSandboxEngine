@@ -74,6 +74,62 @@ taking precedence over `ACCEPT`.
 
 ---
 
+## The experiment report
+
+`run_test_pipeline_report()` runs the same experiment as `run_test_pipeline()`.
+Instead of the event list it returns an `ExperimentReport`, from which a CI
+artifact alone is enough to reconstruct the run:
+
+```python
+from nse.core.pipeline import run_test_pipeline_report
+
+report = await run_test_pipeline_report(request, controller=controller, timeout=60)
+
+report.result.outcome            # "completed", "rules_invalid", "setup_failure",
+                                 # "instrument_failure", "execution_failure", "timeout"
+report.result.verdicts           # ["ACCEPT", "DROP"] - what reduce_verdicts() returns
+report.result.oracle             # readiness / liveness canary: observed, missed, not_reached
+report.result.teardown_complete  # False if teardown failed or left resources behind
+report.measurement_valid         # completed, cleaned up, every control and capture sound
+report.write("artefacts/experiment.json")  # atomic, sorted keys
+```
+
+It never raises for a failed run. Rule, setup, oracle, execution and teardown
+errors are recorded with the stage they happened in, so a broken instrument, a
+timeout and an incomplete cleanup each have their own outcome. Cancellation
+still propagates.
+
+The sections separate what is reproducible from what is specific to one run:
+
+| Section | Contents | Same on a re-run? |
+| :--- | :--- | :--- |
+| `input` | The request, with SHA-256 of the ruleset and of the request | Yes |
+| `environment` | NSE, Python, dependency, kernel and tool versions | Yes, on the same host |
+| `result` | Outcome, oracle status, verdicts per stimulus, errors by stage, residual resources, positive controls | Yes, for a deterministic ruleset |
+| `observations` | Trace and canary events, canary attempts, injection times, managed processes with verified identity, captures | No: kernel trace ids differ |
+| `run` | Test and ownership ids, namespace and interface names, timestamps, seconds per stage | No |
+
+The report states what NSE measured, not what you expected: comparing the
+verdicts is your test's job, as the CLI does.
+
+### Linking captures and positive controls
+
+Captures and positive controls happen around the pipeline, so attach them
+afterwards. `attach()` returns a copy, hashes the files the captures wrote into
+`report.artifacts`, and lets them count towards `measurement_valid`:
+
+```python
+from nse.models.experiment_report import PositiveControl
+
+report = report.attach(
+    captures=[await asserter.stop_report()],
+    controls=[PositiveControl(name="probe seen with the ruleset flushed", passed=probe_seen)],
+)
+assert report.measurement_valid, report.result
+```
+
+---
+
 ## In pytest
 
 ```python

@@ -342,6 +342,19 @@ class NetnsController:
             with self._registry.edit() as journal:
                 self._cleanup_resources(journal, run_id=run_id)
 
+    def residual_resources(self, run_id: str) -> list[str]:
+        """Resources of run *run_id* still recorded as owned, e.g. after a failed teardown.
+
+        Cleanup keeps the record of anything it could not remove or verify, so a
+        non-empty answer means the run did not clean up completely.
+        """
+        data = self._registry.data
+        if data is None:
+            return []
+        return sorted(
+            f"{entry.kind} {entry.name}" for entry in data.resources if entry.run_id == run_id
+        )
+
     def _preflight(self, interfaces: Sequence[str], addresses: Sequence[str]) -> None:
         if len(set(interfaces)) != len(interfaces) or any(
             not name or len(name.encode()) > 15 or any(c in name for c in "/: \t\n")

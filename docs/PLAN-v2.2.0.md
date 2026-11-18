@@ -1,6 +1,6 @@
 # NSE v2.2.0 — piano di lavoro
 
-Stato: fasi 0–6 completate; prossima fase 7. Aggiornato: 18 novembre 2026.
+Stato: fasi 0–7 completate; prossima fase 8. Aggiornato: 18 novembre 2026.
 
 Obiettivo: rendere verificabili proprietà delle risorse, disponibilità degli
 osservatori e completezza dei risultati, mantenendo il motore piccolo e le API
@@ -252,23 +252,27 @@ con `setsid` e non richiede di registrare i PID per il recupero.
 
 ## 7. Rapporto riproducibile dell'esperimento
 
-- [ ] Aggiungere un risultato dettagliato tramite un nuovo entrypoint, per esempio
+- [x] Aggiungere un risultato dettagliato tramite un nuovo entrypoint, per esempio
   `run_test_pipeline_report()`, mantenendo `run_test_pipeline() -> list[TraceEvent]`.
   Entrambi devono usare la stessa implementazione dell'esperimento.
-- [ ] Includere schema/versione, run ID, configurazione e hash delle regole,
+- [x] Includere schema/versione, run ID, configurazione e hash delle regole,
   topologia e indirizzi, versioni NSE/Python/dipendenze/kernel/tool, tempi,
   stimoli, identità dei processi, eventi e risultati dei controlli canary.
-- [ ] Collegare rapporti di cattura, controlli positivi dichiarati dal chiamante,
+- [x] Collegare rapporti di cattura, controlli positivi dichiarati dal chiamante,
   stato dell'oracle, errori di setup/esecuzione/teardown e risorse residue.
-- [ ] Aggiungere export JSON opzionale alla CLI e manifest degli artefatti con
+- [x] Aggiungere export JSON opzionale alla CLI e manifest degli artefatti con
   hash. Ordinare stabilmente i campi, distinguendo dati riproducibili da tempi
   e identificatori specifici della run; scrivere atomicamente anche report falliti.
-- [ ] Conservare exit code e comportamento ordinario della CLI. Un errore dello
+- [x] Conservare exit code e comportamento ordinario della CLI. Un errore dello
   strumento o del teardown deve restare visibile e non diventare un test passato.
 
 Completamento: da un artefatto CI si ricostruiscono input, ambiente, osservazioni
 e limiti. Successo, regola errata, strumento guasto, timeout e cleanup incompleto
 hanno esiti distinguibili; nessuna aspettativa specifica TTP entra nel motore.
+
+Esito: completata il 18 novembre 2026; dettagli e verifiche in
+[PHASE7-v2.2.0.md](PHASE7-v2.2.0.md). La CLI usa sempre il rapporto, così un
+teardown incompleto fa fallire il caso anche senza export JSON.
 
 ## 8. Esempi e documentazione
 

@@ -31,6 +31,9 @@ class TraceAttribution:
     def __init__(self, packets: list[PacketSpec]) -> None:
         self.packets = packets
         self.roles: dict[str, Literal["stimulus", "response", "background"]] = {}
+        #: Trace id -> indices of the packets its first hook matches. Identical
+        #: packets cannot be told apart, so a trace may match several.
+        self.stimuli: dict[str, tuple[int, ...]] = {}
 
     def observe(self, event: TraceEvent) -> None:
         if not event.trace_id:
@@ -39,8 +42,12 @@ class TraceAttribution:
             # The first hook precedes user NAT chains. Later hooks may expose
             # translated addresses; they must inherit, not replace, attribution.
             role: Literal["stimulus", "response", "background"] = "background"
-            if any(packet_matches(event, packet) for packet in self.packets):
+            matched = tuple(
+                index for index, packet in enumerate(self.packets) if packet_matches(event, packet)
+            )
+            if matched:
                 role = "stimulus"
+                self.stimuli[event.trace_id] = matched
             elif any(packet_matches(event, packet, reverse=True) for packet in self.packets):
                 role = "response"
             self.roles[event.trace_id] = role

@@ -109,3 +109,18 @@ bounded sample in memory; `limits=` takes a `CaptureLimits` (also exported from
     options:
       show_root_heading: true
       show_source: true
+
+::: nse.models.experiment_report
+    options:
+      show_root_heading: true
+      show_source: true
+
+::: nse.models.artifacts
+    options:
+      show_root_heading: true
+      show_source: true
+
+::: nse.core.verdicts
+    options:
+      show_root_heading: true
+      show_source: true

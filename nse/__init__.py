@@ -10,6 +10,7 @@ from .core.netns_controller import NetnsController
 from .core.process import IdentityError, ManagedProcess, ProcessExitedError, ProcessStartError
 from .core.sniffer import CaptureError, CaptureStartError, CaptureStateError, PCAPAsserter
 from .models.capture_report import CaptureLimits, CaptureReport
+from .models.experiment_report import ExperimentReport, PositiveControl
 from .models.process import EffectiveIdentity, ProcessIdentity, ProcessResult
 
 try:
@@ -27,10 +28,12 @@ __all__ = [
     "CaptureStartError",
     "CaptureStateError",
     "EffectiveIdentity",
+    "ExperimentReport",
     "IdentityError",
     "ManagedProcess",
     "NetnsController",
     "PCAPAsserter",
+    "PositiveControl",
     "ProcessExitedError",
     "ProcessIdentity",
     "ProcessResult",

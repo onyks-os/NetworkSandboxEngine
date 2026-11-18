@@ -103,6 +103,24 @@ minor release under Semantic Versioning. See `docs/PLAN-v2.2.0.md`.
     written to a new file.
   - Readiness: `wait_for_output()` waits for an explicit signal from the
     process.
+- Reproducible experiment reports: `nse.core.pipeline.run_test_pipeline_report()`
+  runs the same experiment as `run_test_pipeline()` and returns an
+  `nse.ExperimentReport`, which can be rebuilt from a CI artifact alone.
+  - Sections: `input` (request, ruleset and request hashes), `environment`
+    (NSE, Python, dependency, kernel and tool versions), `result`,
+    `observations` and `run`.
+  - `result.outcome` keeps completed, rules invalid, setup failure, instrument
+    failure, execution failure and timeout apart. Errors are recorded with
+    their stage, and teardown errors and residual resources are recorded too.
+  - Captures and caller-declared `nse.PositiveControl` checks are linked with
+    `attach()`, which also hashes the capture files.
+  - JSON output has sorted keys and is written atomically.
+  - `timeout=` stops a run that overruns, then tears it down.
+- `nse-runner --report-dir DIR` writes `report.json` (status, expected and
+  observed verdicts, and the experiment report of every case) and
+  `manifest.json` (SHA-256 of every artifact). Both are written atomically, also
+  for a failed, unreadable or interrupted suite. `--timeout SECONDS` bounds
+  each case.
 - Mock listeners are managed processes that confirm their bind
   (`nse.core.mock_listener.start_listener`). The pipeline starts one per
   protocol and port and reports a bind failure as a setup error, never as an
@@ -110,6 +128,14 @@ minor release under Semantic Versioning. See `docs/PLAN-v2.2.0.md`.
 
 ### Changed
 
+- **`nse-runner` fails a case that did not clean up.** A teardown error, or a
+  resource of the run still recorded afterwards, prints `[TEARDOWN ERROR]` and
+  exits 1, even when every verdict matched. Previously a cleanup that left
+  resources behind was only logged. Timeouts, invalid rules and setup failures
+  print `[TIMEOUT]`, `[RULES ERROR]` and `[SETUP ERROR]` instead of
+  `[ORACLE ERROR]`. Output and exit codes are otherwise unchanged.
+- `reduce_verdicts()` lives in `nse.core.verdicts`, so the engine and the CLI
+  share one implementation; `nse.cli.runner.reduce_verdicts` still works.
 - **Deleting a namespace stops every process still inside it**, whether
   started by NSE or left behind. This includes descendants that detached with
   `setsid`, which used to keep running in an unnamed namespace. It applies to

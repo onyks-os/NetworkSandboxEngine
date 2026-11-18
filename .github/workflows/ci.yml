@@ -159,6 +159,22 @@ jobs:
         sudo -E .venv/bin/python -c 'import os; assert os.geteuid() == 0'
         sudo -E bash scripts/isolated-netns.sh .venv/bin/python -m pytest tests -v -m integration
 
+    # The documented YAML suite through the CLI, with its experiment report kept
+    # as an artifact: input, environment, observations and limits of each case,
+    # plus a SHA-256 manifest. Uploaded even when the suite fails.
+    - name: Run the YAML suite with a JSON report
+      run: >-
+        sudo -E bash scripts/isolated-netns.sh
+        .venv/bin/nse-runner --file tests/test_suite.yaml --report-dir nse-report
+
+    - name: Upload the experiment report
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: nse-report-${{ matrix.os }}
+        path: nse-report/
+        if-no-files-found: error
+
   blindness:
     # The meta-test. NSE_FORCE_BLIND makes the parser understand nothing, which
     # is what a kernel format change looks like from the outside. The suite must
