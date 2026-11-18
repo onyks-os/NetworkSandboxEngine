@@ -148,10 +148,16 @@ jobs:
 
     # The pytest marker selects tests; it does not grant root. Fail explicitly
     # if privilege elevation fails, rather than passing a suite of skipped tests.
+    #
+    # The suite runs in its own empty network namespace (scripts/isolated-netns.sh).
+    # Some runner hosts route part of 10.0.0.0/24, NSE's default subnet, to their
+    # NIC, and NSE correctly refuses a topology that would shadow a host route.
+    # The namespace keeps the runner's network out of the experiment and the
+    # experiment's traffic off the runner's network.
     - name: Run privileged oracle and resource lifecycle integration tests
       run: |
         sudo -E .venv/bin/python -c 'import os; assert os.geteuid() == 0'
-        sudo -E .venv/bin/python -m pytest tests -v -m integration
+        sudo -E bash scripts/isolated-netns.sh .venv/bin/python -m pytest tests -v -m integration
 
   blindness:
     # The meta-test. NSE_FORCE_BLIND makes the parser understand nothing, which
@@ -178,8 +184,9 @@ jobs:
     - name: Bootstrap Environment
       run: make setup
 
+    # In its own network namespace, for the reason given in the integration job.
     - name: Assert a blind parser fails the run
-      run: make test-blind
+      run: sudo -E bash scripts/isolated-netns.sh make test-blind
 
   smoke-pypi:
     name: Package installs and imports

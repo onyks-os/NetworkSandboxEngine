@@ -195,6 +195,7 @@ def _fork_check(runtime: Path, result: Path) -> None:
     fd = registry._owner_fd
     pid = os.fork()
     if pid == 0:
+        code = 5  # anything unexpected, even a BaseException: never return into pytest
         try:
             try:
                 os.fstat(fd)
@@ -211,9 +212,9 @@ def _fork_check(runtime: Path, result: Path) -> None:
                 os._exit(3)
             ResourceRegistry().recover(lambda journal: os._exit(4))
             result.write_text("child cannot inherit ownership")
-            os._exit(0)
-        except BaseException:
-            os._exit(5)
+            code = 0
+        finally:
+            os._exit(code)
     _, status = os.waitpid(pid, 0)
     assert os.waitstatus_to_exitcode(status) == 0
     assert result.exists()
@@ -285,3 +286,16 @@ def test_missing_runtime_parent_does_not_allow_partial_mutation(
     registry = ResourceRegistry()
     with pytest.raises(FileNotFoundError), registry.edit():
         pass
+
+
+def test_a_descriptor_is_closed_even_if_it_cannot_be_tracked(tmp_path: Path) -> None:
+    class Refusing(set[int]):
+        def add(self, fd: int) -> None:
+            self.attempted = fd
+            raise MemoryError
+
+    refusing = Refusing()
+    with patch.object(registry_module, "_fds", refusing), pytest.raises(MemoryError):
+        registry_module._open(tmp_path / "x", os.O_RDWR | os.O_CREAT)
+    with pytest.raises(OSError):  # closed, not leaked
+        os.fstat(refusing.attempted)

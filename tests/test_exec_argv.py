@@ -146,7 +146,7 @@ async def test_cancellation_does_not_leave_the_child_running() -> None:
             await asyncio.sleep(0.01)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
-            await task
+            await asyncio.wait_for(task, timeout=10)
     assert started[0].returncode is not None  # reaped, not orphaned
     with pytest.raises(ProcessLookupError):
         os.kill(started[0].pid, 0)

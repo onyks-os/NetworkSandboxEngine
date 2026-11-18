@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import multiprocessing
 import os
 import socket
@@ -81,6 +82,22 @@ def _message(pipe: Connection) -> object:
     return pipe.recv()
 
 
+def _receiver(host: str) -> socket.socket:
+    """A receiver bound to exactly *host*, never to every interface.
+
+    IP_FREEBIND lets it bind before the worker has assigned the address.
+    """
+    receiver = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        receiver.setsockopt(socket.IPPROTO_IP, getattr(socket, "IP_FREEBIND", 15), 1)
+        receiver.bind((host, 0))
+        receiver.settimeout(5)
+    except BaseException:
+        receiver.close()
+        raise
+    return receiver
+
+
 def _traffic(pipe: Connection, receiver: socket.socket, payload: str) -> None:
     pipe.send((receiver.getsockname()[1], payload))
     assert _message(pipe) == "sent"
@@ -98,17 +115,18 @@ def test_other_process_keeps_transferring_during_teardown_and_recovery(
     second = context.Process(
         target=_worker, args=(str(runtime_registry), "nse_b", 12, second_child)
     )
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as receiver:
-        receiver.bind(("0.0.0.0", 0))
-        receiver.settimeout(5)
+    with contextlib.ExitStack() as receivers:
+        first_receiver, second_receiver = (
+            receivers.enter_context(_receiver(f"198.18.{number}.1")) for number in (11, 12)
+        )
         try:
             first.start()
             assert _message(first_pipe) == "ready"
-            _traffic(first_pipe, receiver, "A before B starts")
+            _traffic(first_pipe, first_receiver, "A before B starts")
             second.start()
             assert _message(second_pipe) == "ready"
-            _traffic(first_pipe, receiver, "A survives B startup")
-            _traffic(second_pipe, receiver, "B before A closes")
+            _traffic(first_pipe, first_receiver, "A survives B startup")
+            _traffic(second_pipe, second_receiver, "B before A closes")
             if crash:
                 first.kill()
             else:
@@ -122,7 +140,7 @@ def test_other_process_keeps_transferring_during_teardown_and_recovery(
             interfaces = {link.ifname for link in NetworkResources(False).links(None)}
             assert "vhr-nse_a" not in interfaces
             assert "vhr-nse_b" in interfaces
-            _traffic(second_pipe, receiver, "B survives A teardown and startup recovery")
+            _traffic(second_pipe, second_receiver, "B survives A teardown and startup recovery")
             second_pipe.send("stop")
             second.join(10)
             assert second.exitcode == 0

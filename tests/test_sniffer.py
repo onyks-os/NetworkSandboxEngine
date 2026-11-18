@@ -291,7 +291,7 @@ async def test_cancelling_start_releases_resources(backend: Backend) -> None:
     await asyncio.sleep(0.05)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await task
+        await asyncio.wait_for(task, timeout=10)
     report = await asserter.stop_report()
     assert report.termination == "start_cancelled"
     backend.open_gate.set()
@@ -371,7 +371,7 @@ async def test_stop_waits_for_a_start_in_progress(backend: Backend) -> None:
     await asyncio.sleep(0.02)
     assert not stopping.done()
     backend.open_gate.set()
-    await starting
+    assert await starting is None
     report = await stopping
     assert report.termination == "stopped"
     assert report.instrument_healthy
@@ -955,3 +955,18 @@ async def test_a_wedged_writer_is_a_stop_timeout_not_a_complete_file(
     assert report.window_complete is False
     with pytest.raises(CaptureError, match="stop_timeout"):
         await asserter.stop()
+
+
+# The SystemExit is meant to escape the thread: that is the case under test.
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
+async def test_a_thread_killed_before_readiness_does_not_leave_start_waiting(
+    backend: Backend,
+) -> None:
+    backend.open_error = SystemExit(1)  # not an Exception: the loop does not catch it
+    asserter = PCAPAsserter("veth0")
+    began = time.monotonic()
+    with pytest.raises(CaptureStartError) as caught:
+        await asserter.start(timeout=5)
+    assert time.monotonic() - began < 2  # answered at once, not at the start deadline
+    assert caught.value.reason == "backend_error"
+    assert "exited before readiness" in str(caught.value)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import os
 import socket
 import subprocess
@@ -38,6 +39,9 @@ def _capture_threads() -> list[threading.Thread]:
 
 
 def _descriptors() -> dict[str, str]:
+    # Controllers of earlier tests hold their owner lease until collected; collect
+    # them now so that none of their descriptors closes during the measurement.
+    gc.collect()
     result = {}
     for fd in os.listdir("/proc/self/fd"):
         try:

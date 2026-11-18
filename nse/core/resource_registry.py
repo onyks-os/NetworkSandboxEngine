@@ -112,14 +112,20 @@ def _open(path: str | Path, flags: int, *, directory: int | None = None) -> int:
         fd = os.open(
             path, flags | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK, 0o600, dir_fd=directory
         )
-        _fds.add(fd)
+        try:
+            _fds.add(fd)
+        except BaseException:
+            os.close(fd)
+            raise
         return fd
 
 
 def _close(fd: int) -> None:
     with _fd_mutex:
-        _fds.remove(fd)
-        os.close(fd)
+        try:
+            _fds.discard(fd)
+        finally:
+            os.close(fd)
 
 
 @contextlib.contextmanager

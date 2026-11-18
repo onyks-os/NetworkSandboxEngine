@@ -95,22 +95,45 @@ def _worker(runtime: str, mode: str, n: int, pipe: Connection) -> None:
         pipe.close()
 
 
+#: IP_FREEBIND / IPV6_FREEBIND (Linux): bind an address that is still tentative
+#: (IPv6 DAD), so the receiver can be bound to the exact host address at once.
+_FREEBIND = {
+    socket.AF_INET: (socket.IPPROTO_IP, getattr(socket, "IP_FREEBIND", 15)),
+    socket.AF_INET6: (socket.IPPROTO_IPV6, getattr(socket, "IPV6_FREEBIND", 78)),
+}
+
+
+def _bind_exact(host: str) -> socket.socket:
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    receiver = socket.socket(family, socket.SOCK_DGRAM)
+    try:
+        receiver.setsockopt(*_FREEBIND[family], 1)
+        receiver.bind((host, 0))
+    except BaseException:
+        receiver.close()
+        raise
+    return receiver
+
+
 class _Receivers:
     """Root-namespace UDP endpoints for both families."""
 
     def __init__(self) -> None:
-        self.v4 = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.v4.bind(("0.0.0.0", 0))
-        self.v6 = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
-        self.v6.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
-        self.v6.bind(("::", 0))
-        for receiver in (self.v4, self.v6):
-            receiver.settimeout(0.25)
+        self.sockets: dict[str, socket.socket] = {}
         self.lock = threading.Lock()
 
+    def bound(self, host: str) -> socket.socket:
+        """A receiver bound to exactly *host*, never to every interface."""
+        receiver = self.sockets.get(host)
+        if receiver is None:
+            receiver = _bind_exact(host)
+            receiver.settimeout(0.25)
+            self.sockets[host] = receiver
+        return receiver
+
     def close(self) -> None:
-        self.v4.close()
-        self.v6.close()
+        for receiver in self.sockets.values():
+            receiver.close()
 
     def exchange(self, pipe: Connection, mode: str, n: int, label: str) -> None:
         """Deliver one datagram per family from the run behind *pipe* to its host address.
@@ -119,11 +142,12 @@ class _Receivers:
         required, so a datagram from the other run can never satisfy the check.
         """
         network = _network(mode, n)
-        for receiver, address in ((self.v4, network.host_v4), (self.v6, network.host_v6)):
+        for address in (network.host_v4, network.host_v6):
             host = address.split("/")[0]
             payload = f"{label} {uuid.uuid4().hex}"
             deadline = time.monotonic() + 10
             with self.lock:
+                receiver = self.bound(host)
                 while True:
                     assert time.monotonic() < deadline, f"{label}: no delivery to {host}"
                     pipe.send((host, receiver.getsockname()[1], payload))
@@ -150,7 +174,7 @@ class _Background:
                 while not self.stop.is_set():
                     receivers.exchange(pipe, mode, n, label)
                     self.rounds += 1
-            except BaseException as exc:  # reported by finish()
+            except Exception as exc:  # reported by finish()
                 self.error = exc
 
         self.thread = threading.Thread(target=loop, daemon=True)

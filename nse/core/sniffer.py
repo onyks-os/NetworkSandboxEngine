@@ -271,6 +271,7 @@ class _CaptureLoop(threading.Thread):
         self.iface = iface
         self.bpf = bpf
         self._on_ready = on_ready
+        self._signalled = False
         self.limits = limits or CaptureLimits()
         self.output = output
         self._wake_r, self._wake_w = os.pipe()
@@ -305,6 +306,11 @@ class _CaptureLoop(threading.Thread):
                 if self._wake_w >= 0:
                     os.write(self._wake_w, b"x")
 
+    def _signal_ready(self, exc: BaseException | None) -> None:
+        if not self._signalled:
+            self._signalled = True
+            self._on_ready(exc)
+
     def run(self) -> None:
         sock: Any = None
         try:
@@ -312,25 +318,30 @@ class _CaptureLoop(threading.Thread):
                 sock = _open_socket(self.iface, self.bpf)
                 if self.output is not None:
                     self.writer = _PcapFile(self.output, _linktype(sock))
-            except BaseException as exc:
+            except Exception as exc:
                 if sock is not None:  # opened, but the file could not be: never ready
                     with contextlib.suppress(Exception):
                         sock.close()
                     sock = None
                 self.start_error = exc
-                self._on_ready(exc)
+                self._signal_ready(exc)
                 return
             self.started_at = time.time()
             try:
                 _read_stats(sock)  # reset: count only what arrives after readiness
             except Exception as exc:
                 self.stats_reason = f"PACKET_STATISTICS unavailable: {exc}"
-            self._on_ready(None)
+            self._signal_ready(None)
             self._loop(sock)
-        except BaseException as exc:
+        except Exception as exc:
             self.socket_failed = True
             self.errors.append(f"capture loop failed: {exc!r}")
         finally:
+            # Whatever ended the thread (even SystemExit), start() must not wait
+            # for a readiness signal that can no longer come.
+            if not self._signalled:
+                self.start_error = RuntimeError("capture thread exited before readiness")
+                self._signal_ready(self.start_error)
             if sock is not None:
                 self._finish(sock)
             self._close_writer()
@@ -760,8 +771,9 @@ class PCAPAsserter:
             if alive and thread.writer is not None:
                 return thread.writer.packets, thread.writer.bytes, [self.output], False
             return None, None, [], False
-        size = thread.written_bytes
-        with contextlib.suppress(OSError):
-            size = os.stat(self.output).st_size  # what is really on disk
+        try:
+            size: int | None = os.stat(self.output).st_size  # what is really on disk
+        except OSError:
+            size = thread.written_bytes
         complete = not alive and not thread.writer_failed and thread.written == thread.observed
         return thread.written, size, [self.output], complete
