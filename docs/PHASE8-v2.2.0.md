@@ -96,6 +96,14 @@ controllano gli esempi tramite `SRC_DIRS`.
 volta che IPv6 (stimoli e canary) e il NAT del gateway venivano verificati end
 to end con l'oracle.
 
+**Portabilità trovata dalla CI.** Su ubuntu-22.04 il nftables più vecchio tratta
+`gateway` come parola chiave, quindi rifiutava `table ip gateway` con
+"unexpected gateway, expecting string". nftables 1.0.6 del container e la
+versione di ubuntu-24.04 lo accettano. NSE l'ha riportato correttamente come
+`[RULES ERROR]`, non come verdetto sbagliato. La tabella ora si chiama
+`router_policy`. Senza l'esecuzione degli esempi su più immagini, l'esempio
+documentato sarebbe stato rotto per chi usa una distribuzione più vecchia.
+
 **Miglioramento d'uso trovato scrivendo gli esempi.** mypy rifiutava
 `ProcessIdentity(capabilities={"net_bind_service"})`, che è la forma della
 documentazione, perché il campo era annotato solo come `frozenset`. Ora

@@ -11,7 +11,7 @@ tests:
   - name: "NAT gateway: forward and masquerade DNS and HTTP, drop SSH"
     topology: gateway
     rules: |
-      table ip gateway {
+      table ip router_policy {
         chain forward {
           type filter hook forward priority 0; policy drop;
           ct state established,related accept
