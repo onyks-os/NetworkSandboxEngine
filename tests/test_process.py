@@ -10,6 +10,7 @@ tests check the real boundary.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import errno
 import json
 import os
@@ -417,6 +418,7 @@ async def test_output_to_files_and_discarded(sandbox_env: dict[str, str], tmp_pa
     )
     result = await process.wait(10)
     assert out.read_bytes() == b"to-file\n"
+    assert out.stat().st_mode & 0o777 == 0o600  # output may hold secrets
     assert result.stdout is None
     assert result.stdout_path == str(out)
     assert result.stderr is None
@@ -811,13 +813,11 @@ async def test_the_probe_works_in_every_posix_shell(
         process_module, "resolve", lambda name: shell if name == "sh" else real(name)
     )
     # Push the descriptor numbers well above 9 in NSE, as a busy process would.
-    held = [os.open("/dev/null", os.O_RDONLY) for _ in range(20)]
-    try:
+    with contextlib.ExitStack() as held:
+        for _ in range(20):
+            held.enter_context(open(os.devnull, "rb"))
         process = await _spawn(["/bin/echo", "probe ok"], sandbox_env)
         assert (await process.wait(10)).stdout == b"probe ok\n"
-    finally:
-        for fd in held:
-            os.close(fd)
 
 
 async def test_concurrent_waiters_share_one_result(sandbox_env: dict[str, str]) -> None:

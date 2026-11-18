@@ -216,7 +216,8 @@ The verified identity is in `process.identity` and in the result.
 **Output.** stdin is `/dev/null`. stdout and stderr are captured by default, up
 to `max_output_bytes` each (1 MiB); the rest is counted in `stdout_dropped` /
 `stderr_dropped`, not kept. Pass `"discard"`, or a path to write a new file
-instead (an existing file is never overwritten).
+instead: it is created with mode 0600, since output may hold secrets, and an
+existing file is never overwritten.
 
 **Ending a process.**
 

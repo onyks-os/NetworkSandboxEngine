@@ -619,7 +619,9 @@ def _open_output(target: Output, fds: list[int]) -> tuple[int | None, str | None
     if target == "discard":
         return None, None, -1
     path = os.path.abspath(os.fspath(target))
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o644)
+    # 0600: application output may hold secrets. The process writes through the
+    # inherited descriptor, so the mode never stops it, whatever its identity.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o600)
     fds.append(fd)
     return fd, path, -1
 
@@ -643,7 +645,7 @@ async def spawn_process(
     process; raises :class:`ProcessStartError` (or :class:`IdentityError`) and
     leaves nothing running otherwise. stdin is ``/dev/null``. *stdout* and
     *stderr* are ``"capture"`` (at most *max_output_bytes* kept, the rest
-    counted), ``"discard"``, or a path to a new file (never overwritten).
+    counted), ``"discard"``, or a path to a new file (mode 0600, never overwritten).
     """
     args = validate_argv(argv)
     requested = identity or ProcessIdentity()

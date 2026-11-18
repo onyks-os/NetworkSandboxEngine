@@ -52,6 +52,7 @@ Nel processo di NSE, che ha più thread, non c'è alcun `preexec_fn`.
 Lo scambio passa dallo stdin della catena, che è un socketpair: la sonda scrive
 e legge sul descrittore 0, poi esegue l'applicazione con stdin su `/dev/null`.
 Il primo progetto usava due pipe ereditate e falliva nel container Debian:
+
 - dash, la `/bin/sh` di Debian e Ubuntu, redirige solo i descrittori 0-9 ("Bad
   fd number"), e quelli ereditati da NSE erano maggiori;
 - su Fedora `/bin/sh` è bash, quindi il problema non si vedeva.
