@@ -1,6 +1,6 @@
 # NSE v2.2.0 — piano di lavoro
 
-Stato: fasi 0–5 completate; prossima fase 6. Aggiornato: 18 novembre 2026.
+Stato: fasi 0–6 completate; prossima fase 7. Aggiornato: 18 novembre 2026.
 
 Obiettivo: rendere verificabili proprietà delle risorse, disponibilità degli
 osservatori e completezza dei risultati, mantenendo il motore piccolo e le API
@@ -225,18 +225,18 @@ con un flag `store=False` separato.
 
 ## 6. Processi applicativi gestiti
 
-- [ ] Aggiungere opzioni esplicite per UID, GID, gruppi e capability, mantenendo
+- [x] Aggiungere opzioni esplicite per UID, GID, gruppi e capability, mantenendo
   l'identità corrente come default. Verificare e registrare l'identità effettiva.
-- [ ] Entrare nel namespace con i privilegi necessari, poi applicare l'identità
+- [x] Entrare nel namespace con i privilegi necessari, poi applicare l'identità
   richiesta prima dell'applicazione; evitare callback `preexec_fn` nel processo
   con thread. Un'identità non applicabile deve causare errore, senza fallback root.
-- [ ] Aggiungere un helper per processi persistenti con handle gestito, argv,
+- [x] Aggiungere un helper per processi persistenti con handle gestito, argv,
   timeout, cancellazione, exit code e stdout/stderr con limiti o artefatti su file.
-- [ ] Registrare i processi e gestire terminazione, attesa, escalation e raccolta
+- [x] Registrare i processi e gestire terminazione, attesa, escalation e raccolta
   dei figli prima di eliminare link e namespace. Riutilizzarlo per i mock listener.
-- [ ] Verificare disponibilità dei listener tramite conferma esplicita, oltre alla
+- [x] Verificare disponibilità dei listener tramite conferma esplicita, oltre alla
   sola creazione del processo. Distinguere errore di bind da stimolo non osservato.
-- [ ] Definire il confine dei figli gestiti. Un process group da solo non contiene
+- [x] Definire il confine dei figli gestiti. Un process group da solo non contiene
   processi che si staccano: valutare cgroup per quel requisito, senza dichiarare
   garanzie non ottenibili sul sistema in uso. Il recupero dopo crash verifica
   identità dei processi, non manda segnali a PID potenzialmente riutilizzati.
@@ -244,6 +244,11 @@ con un flag `store=False` separato.
 Completamento: processo root e processo non privilegiato con identità verificata;
 timeout/cancellazione di un processo con figli; teardown e recupero dopo crash
 senza attività residue entro il confine dichiarato e senza toccare altre run.
+
+Esito: completata il 18 novembre 2026; dettagli e verifiche in
+[PHASE6-v2.2.0.md](PHASE6-v2.2.0.md). Il confine dichiarato è il namespace di
+rete, sempre disponibile, invece dei cgroup. Contiene anche i processi staccati
+con `setsid` e non richiede di registrare i PID per il recupero.
 
 ## 7. Rapporto riproducibile dell'esperimento
 

@@ -24,12 +24,27 @@ from typing import TYPE_CHECKING, Any, cast
 from nse.core.async_work import run_blocking
 from nse.core.naming import NamespaceNames, interface_suffix
 from nse.core.paths import resolve
+from nse.core.process import (
+    DEFAULT_GRACE,
+    DEFAULT_OUTPUT_LIMIT,
+    DEFAULT_START_TIMEOUT,
+    ManagedProcess,
+    NetnsIdentity,
+    Output,
+    ProtectedNamespaceError,
+    spawn_process,
+    terminate_namespace,
+)
+from nse.core.process import validate_argv as _validate_argv
 from nse.core.resource_network import NetworkResources
 from nse.core.resource_registry import Journal, OwnershipError, Resource, ResourceRegistry
 from nse.core.utils import is_in_container
 from nse.models.network_config import GatewayNetwork, SimpleNetwork
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+    from nse.models.process import ProcessIdentity, ProcessResult
     from nse.models.test_request import TestRequest
     from nse.models.trace_event import TraceEvent
 
@@ -49,30 +64,6 @@ class TestRun:
     )
 
 
-def _validate_argv(argv: Sequence[str | os.PathLike[str]]) -> list[str]:
-    """Return *argv* as a list of ``str`` or explain, before any process starts, why not."""
-    if isinstance(argv, (str, bytes, bytearray)) or not isinstance(argv, Sequence):
-        raise TypeError(
-            "argv must be a sequence of arguments, not a single string; "
-            "use exec() for a whitespace-split command"
-        )
-    arguments: list[str] = []
-    for index, raw in enumerate(argv):
-        value = os.fspath(raw) if isinstance(raw, os.PathLike) else raw
-        if not isinstance(value, str):
-            raise TypeError(
-                f"argv[{index}] must be str or os.PathLike[str], got {type(value).__name__}"
-            )
-        if "\0" in value:
-            raise ValueError(
-                f"argv[{index}] contains a NUL character, which no process can receive"
-            )
-        arguments.append(value)
-    if not arguments or not arguments[0]:
-        raise ValueError("argv must start with a non-empty program name")
-    return arguments
-
-
 class NamespaceSandbox:
     """
     Represents an active isolated network namespace sandbox.
@@ -87,6 +78,83 @@ class NamespaceSandbox:
         self.peer_iface = f"vrh-{interface_suffix(name)}"
         self._source_v4 = "10.0.1.1"
         self._source_v6 = "fd00:1::1"
+        self._processes: list[ManagedProcess] = []
+
+    async def start_process(
+        self,
+        argv: Sequence[str | os.PathLike[str]],
+        *,
+        identity: ProcessIdentity | None = None,
+        env: Mapping[str, str] | None = None,
+        cwd: str | os.PathLike[str] | None = None,
+        stdout: Output = "capture",
+        stderr: Output = "capture",
+        max_output_bytes: int = DEFAULT_OUTPUT_LIMIT,
+        start_timeout: float = DEFAULT_START_TIMEOUT,
+    ) -> ManagedProcess:
+        """
+        Start a long-running program in the namespace and return its handle.
+
+        *argv* is passed exactly, as for :meth:`exec_argv`. *identity* (UID, GID,
+        groups, capabilities) is applied after entering the namespace and verified
+        against what the kernel reports for the process itself before the
+        program is allowed to start; a mismatch raises
+        :class:`~nse.core.process.IdentityError` and nothing runs. Without
+        *identity* the program runs as NSE does, and that identity is recorded.
+
+        stdin is ``/dev/null``. *stdout*/*stderr* are ``"capture"`` (keeping at
+        most *max_output_bytes*, counting the rest), ``"discard"`` or a path to
+        a new file. Every process still running when the sandbox closes is
+        stopped, together with anything else left in the namespace.
+        """
+        netns = self.controller.namespace_identity(self.name)
+        if netns is None:
+            raise OwnershipError(f"namespace {self.name} does not exist")
+        process = await spawn_process(
+            self.controller.exec_prefix(self.name),
+            argv,
+            netns=netns,
+            identity=identity,
+            env=env,
+            cwd=cwd,
+            stdout=stdout,
+            stderr=stderr,
+            max_output_bytes=max_output_bytes,
+            start_timeout=start_timeout,
+        )
+        self._processes.append(process)
+        return process
+
+    async def run_process(
+        self,
+        argv: Sequence[str | os.PathLike[str]],
+        *,
+        timeout: float | None = None,
+        grace: float = DEFAULT_GRACE,
+        check: bool = False,
+        **options: Any,
+    ) -> ProcessResult:
+        """
+        Run a program to completion, as :meth:`start_process` then ``wait(timeout)``.
+
+        When *timeout* expires the process and its group are stopped (SIGTERM,
+        *grace* seconds, SIGKILL) and the result says ``termination="timeout"``.
+        With *check*, a result that is not ``ok`` raises
+        ``subprocess.CalledProcessError``.
+        """
+        process = await self.start_process(argv, **options)
+        result = await process.wait(timeout, grace=grace)
+        return result.check() if check else result
+
+    async def _stop_processes(self) -> None:
+        """Stop every managed process still running, in parallel."""
+        processes, self._processes = self._processes, []
+        results = await asyncio.gather(
+            *(process.terminate() for process in processes), return_exceptions=True
+        )
+        for process, result in zip(processes, results, strict=True):
+            if isinstance(result, BaseException):
+                logger.warning("Stopping %s (pid %d) failed: %s", process.argv, process.pid, result)
 
     async def exec(self, command: str) -> subprocess.CompletedProcess[bytes]:
         """
@@ -130,8 +198,9 @@ class NamespaceSandbox:
         try:
             stdout, stderr = await proc.communicate()
         except asyncio.CancelledError:
-            # Do not leave the child running unobserved. Its own children are
-            # managed in a later release (application process lifecycle).
+            # Do not leave the child running unobserved. Its own children stay
+            # in the namespace until teardown stops everything in it; use
+            # start_process() for a managed tree, identity and timeouts.
             with contextlib.suppress(ProcessLookupError):
                 proc.kill()
             with contextlib.suppress(asyncio.CancelledError):
@@ -453,6 +522,10 @@ class NetnsController:
             entry.state = "created"
             journal.save()
 
+    def namespace_identity(self, name: str) -> NetnsIdentity | None:
+        """``(st_dev, st_ino)`` of namespace *name*, or None if it does not exist."""
+        return self._resources.identity(name)
+
     def exec_prefix(self, name: str) -> list[str]:
         if self.use_nsenter:
             return [resolve("nsenter"), f"--net=/var/run/netns/{name}", "--"]
@@ -549,6 +622,22 @@ class NetnsController:
             self._cleanup_resources(journal, namespace=name)
 
     def _delete_namespace(self, name: str) -> bool:
+        # The namespace is the process boundary: nothing started in it, nor
+        # anything those processes left behind (even detached from their
+        # session), may outlive it unseen in an unnamed namespace.
+        netns = self._resources.identity(name)
+        if netns is not None:
+            try:
+                survivors = terminate_namespace(netns)
+            except ProtectedNamespaceError as exc:
+                logger.error("Not deleting namespace %s: %s", name, exc)
+                return False
+            if survivors:
+                logger.warning(
+                    "Processes %s survived SIGKILL in namespace %s; deleting it anyway",
+                    survivors,
+                    name,
+                )
         delays = [0.1, 0.5, 1.0]
         for idx, delay in enumerate(delays):
             try:
@@ -595,7 +684,10 @@ class NetnsController:
             await run_blocking(setup)
             yield sandbox
         finally:
-            await run_blocking(self._cleanup_run, run_id)
+            try:
+                await sandbox._stop_processes()
+            finally:
+                await run_blocking(self._cleanup_run, run_id)
 
     @staticmethod
     def _simple_network(host_ip: str | list[str], peer_ip: str | list[str]) -> SimpleNetwork:

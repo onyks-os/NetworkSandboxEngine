@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -234,7 +234,7 @@ async def _run_pipeline_with(harvester: StubHarvester) -> list[TraceEvent]:
         patch.object(pipeline_module, "TraceHarvester", lambda: harvester),
         patch.object(pipeline_module, "ScapyInjector", lambda **_: injector),
         patch.object(pipeline_module, "RuleEngine", MagicMock()),
-        patch.object(pipeline_module, "start_mock_listener", MagicMock()),
+        patch.object(pipeline_module, "start_listener", AsyncMock()),
         patch.object(pipeline_module, "read_conntrack_table", lambda *a, **k: []),
         patch.object(pipeline_module.subprocess, "run", MagicMock()),
     ):
@@ -264,7 +264,7 @@ async def test_pipeline_does_not_inject_test_packets_when_blind() -> None:
         patch.object(pipeline_module, "TraceHarvester", lambda: harvester),
         patch.object(pipeline_module, "ScapyInjector", lambda **_: injector),
         patch.object(pipeline_module, "RuleEngine", MagicMock()),
-        patch.object(pipeline_module, "start_mock_listener", MagicMock()),
+        patch.object(pipeline_module, "start_listener", AsyncMock()),
         patch.object(pipeline_module, "read_conntrack_table", lambda *a, **k: []),
         patch.object(pipeline_module.subprocess, "run", MagicMock()),
     ):
@@ -313,7 +313,7 @@ async def test_pipeline_reports_rule_validation_errors() -> None:
         patch.object(pipeline_module, "TraceHarvester", StubHarvester),
         patch.object(pipeline_module, "ScapyInjector", lambda **_: MagicMock()),
         patch.object(pipeline_module, "RuleEngine", lambda **_: engine),
-        patch.object(pipeline_module, "start_mock_listener", MagicMock()),
+        patch.object(pipeline_module, "start_listener", AsyncMock()),
         patch.object(pipeline_module.subprocess, "run", MagicMock()),
     ):
         events = await run_test_pipeline(request=_request(), controller=controller)
@@ -333,7 +333,7 @@ async def test_pipeline_reports_unexpected_exceptions() -> None:
         patch.object(pipeline_module, "TraceHarvester", StubHarvester),
         patch.object(pipeline_module, "ScapyInjector", lambda **_: MagicMock()),
         patch.object(pipeline_module, "RuleEngine", MagicMock()),
-        patch.object(pipeline_module, "start_mock_listener", MagicMock()),
+        patch.object(pipeline_module, "start_listener", AsyncMock()),
         patch.object(pipeline_module.subprocess, "run", MagicMock()),
     ):
         events = await run_test_pipeline(request=_request(), controller=controller)
@@ -415,8 +415,11 @@ async def _run(
     controller: Any = None,
     conntrack: list[dict[str, Any]] | None = None,
     listener: Any = None,
+    start_listener: Any = None,
 ) -> list[TraceEvent]:
     controller = controller or MagicMock()
+    if start_listener is None:
+        start_listener = AsyncMock(return_value=listener or AsyncMock())
     controller.use_nsenter = False
     injector = MagicMock()
 
@@ -430,9 +433,7 @@ async def _run(
         patch.object(pipeline_module, "TraceHarvester", lambda: harvester),
         patch.object(pipeline_module, "ScapyInjector", lambda **_: injector),
         patch.object(pipeline_module, "RuleEngine", MagicMock()),
-        patch.object(
-            pipeline_module, "start_mock_listener", MagicMock(return_value=listener or MagicMock())
-        ),
+        patch.object(pipeline_module, "start_listener", start_listener),
         patch.object(pipeline_module, "read_conntrack_table", lambda *a, **k: conntrack or []),
         patch.object(pipeline_module.subprocess, "run", MagicMock()),
     ):
@@ -475,21 +476,67 @@ async def test_conntrack_entries_become_events() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_listener_that_refuses_to_die_is_killed() -> None:
-    listener = MagicMock()
-    listener.terminate.side_effect = OSError("already gone")
-    await _run(_request(), StubHarvester(), listener=listener)
-    listener.kill.assert_called_once()
+async def test_listeners_are_stopped_before_the_namespace_is_deleted() -> None:
+    order: list[str] = []
+    listener = AsyncMock()
+    listener.terminate.side_effect = lambda **_: order.append("listener stopped")
+    controller = MagicMock()
+    controller._cleanup_run.side_effect = lambda *_: order.append("namespace deleted")
+    await _run(_request(), StubHarvester(), controller=controller, listener=listener)
+    assert order == ["listener stopped", "namespace deleted"]
 
 
 @pytest.mark.asyncio
-async def test_a_listener_that_hangs_on_wait_is_killed() -> None:
-    import subprocess as sp
+async def test_a_listener_that_fails_to_stop_does_not_block_teardown() -> None:
+    listener = AsyncMock()
+    listener.terminate.side_effect = OSError("already gone")
+    controller = MagicMock()
+    await _run(_request(), StubHarvester(), controller=controller, listener=listener)
+    controller._cleanup_run.assert_called_once()  # which also stops what is left inside
 
-    listener = MagicMock()
-    listener.wait.side_effect = sp.TimeoutExpired("python", 0.5)
-    await _run(_request(), StubHarvester(), listener=listener)
-    listener.kill.assert_called_once()
+
+@pytest.mark.asyncio
+async def test_one_listener_per_protocol_and_port() -> None:
+    request = TestRequest(
+        rules="table ip filter { chain input { type filter hook input priority 0; } }",
+        packets=[
+            PacketSpec(protocol="tcp", dst_port=80),
+            PacketSpec(protocol="tcp", dst_port=80, tcp_flags=["A"]),
+            PacketSpec(protocol="udp", dst_port=80),
+            PacketSpec(protocol="icmp"),
+        ],
+    )
+    start = AsyncMock(return_value=AsyncMock())
+    await _run(request, StubHarvester(), start_listener=start)
+    assert [call.args[2:] for call in start.call_args_list] == [("tcp", 80), ("udp", 80)]
+
+
+@pytest.mark.asyncio
+async def test_a_listener_that_cannot_bind_is_a_setup_error_not_a_verdict() -> None:
+    from nse.core.mock_listener import ListenerStartError
+
+    failure = ListenerStartError(
+        "mock listener tcp/80 exited (1) before it was bound: Address already in use", "tcp", 80
+    )
+    controller = MagicMock()
+    events = await _run(
+        _request(),
+        StubHarvester(),
+        controller=controller,
+        start_listener=AsyncMock(side_effect=failure),
+    )
+    errors = [e for e in events if e.type == "error"]
+    assert [e.raw_message for e in errors] == [str(failure)]
+    assert not [e for e in events if e.verdict and e.type != "error"]
+    controller._cleanup_run.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_a_missing_listener_namespace_is_a_setup_error() -> None:
+    controller = MagicMock()
+    controller.namespace_identity.return_value = None
+    events = await _run(_request(), StubHarvester(), controller=controller)
+    assert any("does not exist" in (e.raw_message or "") for e in events if e.type == "error")
 
 
 @pytest.mark.asyncio
@@ -500,7 +547,7 @@ async def test_pipeline_creates_a_controller_when_none_is_given() -> None:
         patch.object(pipeline_module, "TraceHarvester", lambda: harvester),
         patch.object(pipeline_module, "ScapyInjector", lambda **_: MagicMock()),
         patch.object(pipeline_module, "RuleEngine", MagicMock()),
-        patch.object(pipeline_module, "start_mock_listener", MagicMock()),
+        patch.object(pipeline_module, "start_listener", AsyncMock()),
         patch.object(pipeline_module, "read_conntrack_table", lambda *a, **k: []),
         patch.object(pipeline_module.subprocess, "run", MagicMock()),
     ):
@@ -519,7 +566,7 @@ async def test_pipeline_streams_into_a_caller_supplied_queue() -> None:
         patch.object(pipeline_module, "TraceHarvester", lambda: harvester),
         patch.object(pipeline_module, "ScapyInjector", lambda **_: MagicMock()),
         patch.object(pipeline_module, "RuleEngine", MagicMock()),
-        patch.object(pipeline_module, "start_mock_listener", MagicMock()),
+        patch.object(pipeline_module, "start_listener", AsyncMock()),
         patch.object(pipeline_module, "read_conntrack_table", lambda *a, **k: []),
         patch.object(pipeline_module.subprocess, "run", MagicMock()),
     ):

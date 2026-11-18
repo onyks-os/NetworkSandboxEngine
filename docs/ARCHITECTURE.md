@@ -23,6 +23,7 @@ NetworkSandboxEngine/
 |   |-- core/
 |   |   |-- naming.py           # Uniform netns/veth derive_names() and sweep rules
 |   |   |-- netns_controller.py # Namespace lifecycle, veth wiring, and startup sweep
+|   |   |-- process.py          # Managed processes: verified identity, trees, namespace sweep
 |   |   |-- resource_registry.py # Private journals, owner leases and coordinated recovery
 |   |   |-- resource_network.py # Kernel identity and ownership marker verification
 |   |   |-- scapy_injector.py   # L2/L3 packet forging and injection
@@ -30,8 +31,9 @@ NetworkSandboxEngine/
 |   |   |-- pipeline.py         # run_test_pipeline() orchestrator
 |   |   |-- rule_engine.py      # nft load / validate / trace-arm
 |   |   |-- trace_harvester.py  # nft monitor trace parser and readiness probe
-|   |   `-- mock_listener.py    # TCP/UDP echo daemon spawner
+|   |   `-- mock_listener.py    # TCP/UDP echo daemons, started managed and confirmed bound
 |   |-- models/
+|   |   |-- process.py          # ProcessIdentity, EffectiveIdentity, ProcessResult
 |   |   |-- test_request.py     # PacketSpec, TestRequest, TopologyType
 |   |   `-- trace_event.py      # TraceEvent model
 |   `-- cli/

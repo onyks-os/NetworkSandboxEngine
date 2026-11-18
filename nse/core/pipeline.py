@@ -28,18 +28,18 @@ verdict list that it did not actually measure.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 import os
 import subprocess
 import uuid
-from typing import Any, cast
+from typing import Any
 
 from nse.core.async_work import finish_work, run_blocking
-from nse.core.mock_listener import start_mock_listener
+from nse.core.mock_listener import start_listener
 from nse.core.naming import derive_names
 from nse.core.netns_controller import NetnsController, TestRun
 from nse.core.paths import resolve
+from nse.core.process import ManagedProcess
 from nse.core.rule_engine import RuleEngine, RuleValidationError
 from nse.core.scapy_injector import ScapyInjector
 from nse.core.trace_attribution import TraceAttribution, packet_matches
@@ -271,7 +271,7 @@ async def run_test_pipeline(
     veth_router_host = names.veth_router_host
 
     is_gateway = req.topology == TopologyType.GATEWAY
-    listeners = []
+    listeners: list[ManagedProcess] = []
     harvester = TraceHarvester()
     engine = RuleEngine(use_nsenter=controller.use_nsenter)
     injector = ScapyInjector(use_nsenter=controller.use_nsenter)
@@ -298,15 +298,19 @@ async def run_test_pipeline(
             "[%s] Spawning background mock listeners inside %s", run.test_id, listener_netns
         )
 
-        for pkt in req.packets:
-            if pkt.dst_port:
-                proc = start_mock_listener(
-                    netns_name=listener_netns,
-                    proto=pkt.protocol,
-                    port=pkt.dst_port,
-                    use_nsenter=controller.use_nsenter,
+        listener_identity = controller.namespace_identity(listener_netns)
+        if listener_identity is None:
+            raise RuntimeError(f"listener namespace {listener_netns} does not exist")
+        # One listener per (protocol, port): a second one would fail to bind.
+        wanted = dict.fromkeys(
+            (pkt.protocol.lower(), pkt.dst_port) for pkt in req.packets if pkt.dst_port
+        )
+        for proto, port in wanted:
+            listeners.append(
+                await start_listener(
+                    controller.exec_prefix(listener_netns), listener_identity, proto, port
                 )
-                listeners.append({"proto": pkt.protocol, "port": pkt.dst_port, "proc": proc})
+            )
 
         # ------------------------------------------------------------------
         # 3. Load nftables Rules
@@ -463,17 +467,20 @@ async def run_test_pipeline(
             try:
                 await harvester.aclose()
             finally:
-                for listener in listeners:
-                    proc = cast(subprocess.Popen[str], listener["proc"])
-                    try:
-                        proc.terminate()
-                        proc.wait(timeout=0.5)
-                    except (OSError, subprocess.SubprocessError):
-                        with contextlib.suppress(OSError, subprocess.SubprocessError):
-                            proc.kill()
-                            proc.wait(timeout=0.5)
-                # Only this invocation's random ownership ID can be discharged.
-                await run_blocking(controller._cleanup_run, ownership_id)
+                try:
+                    results = await asyncio.gather(
+                        *(listener.terminate(grace=0.5) for listener in listeners),
+                        return_exceptions=True,
+                    )
+                    for result in results:
+                        if isinstance(result, BaseException):
+                            logger.warning(
+                                "[%s] Stopping a listener failed: %s", run.test_id, result
+                            )
+                finally:
+                    # Only this invocation's random ownership ID can be discharged;
+                    # deleting each namespace also stops anything left inside it.
+                    await run_blocking(controller._cleanup_run, ownership_id)
 
         await finish_work(teardown())
 

@@ -22,6 +22,25 @@ Auto-generated Python API documentation powered by `mkdocstrings`.
 
 ---
 
+## Managed Processes
+
+`NamespaceSandbox.start_process()` / `run_process()` return the handle and result
+documented here; `ProcessIdentity`, `ProcessResult` and the errors are exported
+from `nse`. See
+[managed processes](../how-to/in-process-integration.md#managed-processes-identity-timeouts-process-trees).
+
+::: nse.core.process
+    options:
+      show_root_heading: true
+      show_source: true
+
+::: nse.models.process
+    options:
+      show_root_heading: true
+      show_source: true
+
+---
+
 ## Rule Engine
 
 ::: nse.core.rule_engine

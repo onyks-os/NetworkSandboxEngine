@@ -57,6 +57,9 @@ minor release under Semantic Versioning. See `docs/PLAN-v2.2.0.md`.
   never uses a shell. Its behaviour is unchanged. Cancelling `exec()` or
   `exec_argv()` now kills and reaps the started process instead of leaving it
   running.
+- Two packets to the same port no longer start two mock listeners, the second
+  of which failed to bind unnoticed. Listeners used to be given a fixed 150 ms
+  instead of confirming their bind.
 
 ### Added
 
@@ -86,8 +89,33 @@ minor release under Semantic Versioning. See `docs/PLAN-v2.2.0.md`.
   packet is kept, as before. A full disk or a write, flush or close error makes
   the instrument unhealthy, and no limit, slow writer or file error can produce
   a report that claims a complete window.
+- Managed application processes: `NamespaceSandbox.start_process()` returns a
+  `nse.ManagedProcess` handle, and `run_process()` runs a program to
+  completion. Both take an exact argv and an optional `nse.ProcessIdentity`
+  (UID, GID, groups, capabilities, no_new_privs), applied with `setpriv` after
+  entering the namespace. Before the program runs, the kernel-reported identity
+  of the process itself is compared with the request. A mismatch raises
+  `nse.IdentityError` and never runs the program, with no fallback to root.
+  - Results: `wait(timeout)`, `terminate(grace)` and cancellation stop the
+    whole process group (SIGTERM, then SIGKILL). `nse.ProcessResult` carries
+    the termination cause, exit status, verified identity and output.
+  - Output: captured up to a limit (the excess is counted), discarded or
+    written to a new file.
+  - Readiness: `wait_for_output()` waits for an explicit signal from the
+    process.
+- Mock listeners are managed processes that confirm their bind
+  (`nse.core.mock_listener.start_listener`). The pipeline starts one per
+  protocol and port and reports a bind failure as a setup error, never as an
+  unobserved stimulus.
 
 ### Changed
+
+- **Deleting a namespace stops every process still inside it**, whether
+  started by NSE or left behind. This includes descendants that detached with
+  `setsid`, which used to keep running in an unnamed namespace. It applies to
+  normal teardown and to crash recovery. Processes are identified by namespace
+  membership through a pidfd, never by a PID that may have been recycled.
+  NSE's own namespace and PID 1's are refused outright.
 
 - **`PCAPAsserter.start()` now returns only when capture is ready.** The kernel
   socket is filtering and bound when it returns, so a stimulus may be sent
@@ -105,6 +133,13 @@ minor release under Semantic Versioning. See `docs/PLAN-v2.2.0.md`.
   now imported at `start()`, not in the constructor.
 
 ### Maintenance
+
+- The privileged CI jobs run in a dedicated, empty network namespace
+  (`scripts/isolated-netns.sh`). Some runner hosts route part of NSE's default
+  subnet, which NSE correctly refuses to shadow.
+- `make test-blind` (`scripts/check-blind.sh`) first requires a passing positive
+  control and then requires the blind failure to come from the unobserved
+  canaries. A host where the suite could not run at all used to pass it.
 
 - Update Pydantic and pydantic-core together to 2.14.2 and 2.50.2 using the
   resolver. Their separate dependency PRs each left an incompatible pair of

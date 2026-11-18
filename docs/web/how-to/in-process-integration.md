@@ -168,10 +168,76 @@ fails. Prefer `exec_argv()` for anything but the simplest commands.
 Both methods return `subprocess.CompletedProcess[bytes]` whose `args` include
 the namespace prefix, and raise `subprocess.CalledProcessError`, with stdout and
 stderr attached, on a non-zero exit. Cancelling the call kills and reaps the
-process it started. Its own child processes, identity (UID, GID, capabilities)
-and timeouts are not managed yet; that is planned for a later 2.2.0 phase. The
-process runs with NSE's privileges: entering a network namespace changes the
-visible network, not the user.
+process it started. The process runs with NSE's privileges: entering a network
+namespace changes the visible network, not the user. For a different identity,
+a timeout or a long-running program, use the managed processes below.
+
+### Managed processes: identity, timeouts, process trees
+
+`start_process()` starts a program and returns a handle; `run_process()` runs
+one to completion:
+
+```python
+from nse import ProcessIdentity
+
+nobody = ProcessIdentity(uid=65534, gid=65534, capabilities={"net_bind_service"})
+
+async with controller.create_namespace("nse_app") as ns:
+    # A server that must bind port 80 without being root.
+    server = await ns.start_process(["/usr/sbin/my-server", "--port", "80"], identity=nobody)
+    await server.wait_for_output(b"listening", timeout=10)  # explicit readiness
+    assert server.identity.uids == (65534, 65534, 65534, 65534)
+
+    # A client with a deadline: on timeout it is stopped and the result says so.
+    result = await ns.run_process(["curl", "-sf", "http://[fd00:1::2]/"], timeout=5)
+    assert result.ok, (result.termination, result.stderr)
+# Leaving the block stops the server, its children and anything else still in the namespace.
+```
+
+**Identity.** `ProcessIdentity` sets the UID, GID, supplementary groups and
+capabilities. Every field defaults to "unchanged", so without it the program
+runs as NSE does. A non-root `uid` requires an explicit `gid`, and changing
+either clears the supplementary groups unless you list them. `capabilities`
+is exactly the set the process keeps (effective, permitted, ambient and
+bounding); it also works for root, for example to run root with `net_raw` only.
+
+NSE enters the namespace with its own privileges and applies the identity
+afterwards with `setpriv`. Before the program starts, it reads the identity the
+kernel reports for that very process (same PID) and compares it with the
+request:
+
+- If anything differs, `IdentityError` is raised and **the program never
+  runs**; there is no fallback to root.
+- If `setpriv` itself refuses, for example a capability the kernel does not
+  know, the start fails with `ProcessStartError`.
+
+The verified identity is in `process.identity` and in the result.
+
+**Output.** stdin is `/dev/null`. stdout and stderr are captured by default, up
+to `max_output_bytes` each (1 MiB); the rest is counted in `stdout_dropped` /
+`stderr_dropped`, not kept. Pass `"discard"`, or a path to write a new file
+instead (an existing file is never overwritten).
+
+**Ending a process.**
+
+- `wait(timeout)` returns a `ProcessResult` with `termination` set to
+  `"exited"`, `"timeout"`, `"cancelled"` or `"terminated"`, plus the exit status
+  (negative for a signal), the output and the identity.
+- On a timeout, on cancellation, or when you call `terminate(grace)`, the
+  process and its whole process group get SIGTERM, then SIGKILL after `grace`
+  seconds.
+- `result.check()` raises `CalledProcessError` unless the process exited with 0.
+
+**The boundary.** Each managed process leads its own process group. A
+descendant that leaves the group (`setsid`, a daemon that double-forks) is
+still in the network namespace. That namespace is the boundary NSE enforces:
+before it is deleted, at the end of the block or by crash recovery, every
+process in it is stopped, managed or not.
+
+Processes are identified by namespace membership through a pidfd, so a recycled
+PID is never signalled, and recovery needs no record of PIDs. The one thing
+outside the boundary is a process that moves itself to another network
+namespace, which needs `CAP_SYS_ADMIN`. A dropped identity rules that out.
 
 ---
 

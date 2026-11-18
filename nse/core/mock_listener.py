@@ -9,14 +9,17 @@ Can be run as a standalone script or imported to manage Popen processes.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 import socket
 import subprocess
 import sys
 import threading
 import time
+from collections.abc import Sequence
 
 from nse.core.paths import resolve
+from nse.core.process import ManagedProcess, NetnsIdentity, ProcessExitedError, spawn_process
 
 logger = logging.getLogger("nse.core.mock_listener")
 
@@ -90,7 +93,12 @@ def start_mock_listener(
     host: str = "::",
     use_nsenter: bool = False,
 ) -> subprocess.Popen[str]:
-    """Spawns a mock listener inside the namespace in a background process."""
+    """Spawn a mock listener inside the namespace in a background process.
+
+    Kept for existing callers. It only waits a fixed 150 ms and cannot tell a
+    bind failure from success; :func:`start_listener` confirms the bind and
+    manages the process, and is what the pipeline uses.
+    """
     cmd = []
     if use_nsenter:
         cmd += [resolve("nsenter"), f"--net=/var/run/netns/{netns_name}", "--"]
@@ -118,6 +126,77 @@ def start_mock_listener(
     # Give a tiny slice for the listener to bind and print the starting message
     time.sleep(0.15)
     return proc
+
+
+#: Printed by the listener once its socket is bound; the readiness confirmation.
+READY_MARKER = b" listening on "
+#: Seconds a listener has to confirm it is bound.
+DEFAULT_LISTENER_TIMEOUT = 5.0
+
+
+class ListenerStartError(RuntimeError):
+    """A mock listener could not bind: a setup failure, not a firewall verdict."""
+
+    def __init__(self, message: str, proto: str, port: int, stderr: bytes = b"") -> None:
+        super().__init__(message)
+        self.proto = proto
+        self.port = port
+        self.stderr = stderr
+
+
+async def start_listener(
+    prefix: Sequence[str],
+    netns: NetnsIdentity,
+    proto: str,
+    port: int,
+    host: str = "::",
+    timeout: float = DEFAULT_LISTENER_TIMEOUT,
+) -> ManagedProcess:
+    """Start a mock listener as a managed process; return once it has confirmed its bind.
+
+    Raises :class:`ListenerStartError` when it exits first (typically the port
+    is taken) or does not confirm within *timeout*. Either way nothing is left
+    running, and the failure is reported as setup, never as an unobserved
+    stimulus.
+    """
+    label = f"{proto.lower()}/{port}"
+    process = await spawn_process(
+        prefix,
+        [
+            sys.executable,
+            "-u",
+            "-m",
+            "nse.core.mock_listener",
+            "--proto",
+            proto.lower(),
+            "--port",
+            str(port),
+            "--host",
+            host,
+        ],
+        netns=netns,
+        start_timeout=timeout,
+    )
+    try:
+        await process.wait_for_output(READY_MARKER, timeout=timeout)
+    except ProcessExitedError as exc:
+        detail = (exc.result.stderr or b"").decode(errors="replace").strip()
+        raise ListenerStartError(
+            f"mock listener {label} exited ({exc.result.returncode}) before it was bound"
+            + (f": {detail}" if detail else ""),
+            proto,
+            port,
+            exc.result.stderr or b"",
+        ) from exc
+    except BaseException as exc:
+        await asyncio.shield(process.terminate())
+        if isinstance(exc, TimeoutError):
+            raise ListenerStartError(
+                f"mock listener {label} did not confirm its bind within {timeout}s", proto, port
+            ) from exc
+        raise
+    logger.info("Mock listener %s ready (pid %d)", label, process.pid)
+    return process
 
 
 def main(argv: list[str] | None = None) -> None:

@@ -7,8 +7,10 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _version
 
 from .core.netns_controller import NetnsController
+from .core.process import IdentityError, ManagedProcess, ProcessExitedError, ProcessStartError
 from .core.sniffer import CaptureError, CaptureStartError, CaptureStateError, PCAPAsserter
 from .models.capture_report import CaptureLimits, CaptureReport
+from .models.process import EffectiveIdentity, ProcessIdentity, ProcessResult
 
 try:
     # Read the version from installed metadata rather than restating it here.
@@ -24,7 +26,14 @@ __all__ = [
     "CaptureReport",
     "CaptureStartError",
     "CaptureStateError",
+    "EffectiveIdentity",
+    "IdentityError",
+    "ManagedProcess",
     "NetnsController",
     "PCAPAsserter",
+    "ProcessExitedError",
+    "ProcessIdentity",
+    "ProcessResult",
+    "ProcessStartError",
     "__version__",
 ]
