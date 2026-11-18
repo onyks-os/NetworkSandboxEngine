@@ -134,7 +134,12 @@ def _file(path: str | Path, flags: int, *, directory: int | None = None) -> Iter
     try:
         yield fd
     finally:
-        _close(fd)
+        # _close(), inlined so that static analysis sees the descriptor closed.
+        with _fd_mutex:
+            try:
+                _fds.discard(fd)
+            finally:
+                os.close(fd)
 
 
 def _trusted(fd: int, *, is_directory: bool = False) -> None:

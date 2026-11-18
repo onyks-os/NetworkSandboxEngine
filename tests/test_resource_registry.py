@@ -295,7 +295,11 @@ def test_a_descriptor_is_closed_even_if_it_cannot_be_tracked(tmp_path: Path) -> 
             raise MemoryError
 
     refusing = Refusing()
-    with patch.object(registry_module, "_fds", refusing), pytest.raises(MemoryError):
-        registry_module._open(tmp_path / "x", os.O_RDWR | os.O_CREAT)
+    with (
+        patch.object(registry_module, "_fds", refusing),
+        pytest.raises(MemoryError),
+        registry_module._file(tmp_path / "x", os.O_RDWR | os.O_CREAT),
+    ):
+        pass  # never reached: opening fails after os.open() succeeded
     with pytest.raises(OSError):  # closed, not leaked
         os.fstat(refusing.attempted)
