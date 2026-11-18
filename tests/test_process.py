@@ -834,3 +834,9 @@ async def test_concurrent_waiters_share_one_result(sandbox_env: dict[str, str]) 
         process.wait(10), readiness(), process.terminate(grace=5)
     )
     assert waited is ready is stopped
+
+
+async def test_capabilities_are_always_stored_frozen() -> None:
+    identity = ProcessIdentity(capabilities={"net_raw"})
+    assert isinstance(identity.capabilities, frozenset)
+    assert hash(identity)  # a frozen model stays hashable

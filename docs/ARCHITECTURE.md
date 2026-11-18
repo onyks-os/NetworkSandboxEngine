@@ -43,6 +43,8 @@ NetworkSandboxEngine/
 |   `-- cli/
 |       `-- runner.py           # nse-runner CLI entrypoint (YAML/JSON)
 |
+|-- examples/                   # Complete experiments, run by tests/test_examples.py
+|
 |-- tests/
 |   |-- test_netns.py             # Legacy unit suite (namespaces, injection, models)
 |   |-- test_engine_internals.py  # Rule engine, controller, injector, listeners

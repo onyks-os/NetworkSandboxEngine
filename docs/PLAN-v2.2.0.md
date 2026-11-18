@@ -1,6 +1,6 @@
 # NSE v2.2.0 — piano di lavoro
 
-Stato: fasi 0–7 completate; prossima fase 8. Aggiornato: 18 novembre 2026.
+Stato: fasi 0–8 completate; prossima fase 9. Aggiornato: 18 novembre 2026.
 
 Obiettivo: rendere verificabili proprietà delle risorse, disponibilità degli
 osservatori e completezza dei risultati, mantenendo il motore piccolo e le API
@@ -276,25 +276,29 @@ teardown incompleto fa fallire il caso anche senza export JSON.
 
 ## 8. Esempi e documentazione
 
-- [ ] Aggiungere esempi eseguibili autonomi per firewall workstation, gateway
+- [x] Aggiungere esempi eseguibili autonomi per firewall workstation, gateway
   NAT/forwarding, IPv6 e coesistenza di regole, con input e output attesi.
-- [ ] Includere almeno un'applicazione reale TCP/UDP, oltre ai pacchetti sintetici,
+- [x] Includere almeno un'applicazione reale TCP/UDP, oltre ai pacchetti sintetici,
   e una cattura su file con memoria limitata.
-- [ ] Mostrare un esperimento volutamente guasto in due varianti: politica errata
+- [x] Mostrare un esperimento volutamente guasto in due varianti: politica errata
   con osservatore sano e osservatore guasto. Entrambe devono fallire per il motivo
   atteso; le asserzioni negative devono avere controlli positivi.
-- [ ] Preservare e documentare come punto di forza il contratto canary/parser/
+- [x] Preservare e documentare come punto di forza il contratto canary/parser/
   liveness esistente. Spiegare che capture readiness non prova il percorso.
-- [ ] Sostituire l'affermazione generica «Zero Host Mutation» con la garanzia
+- [x] Sostituire l'affermazione generica «Zero Host Mutation» con la garanzia
   precisa: regole del test nei namespace, nessuna modifica al firewall host;
   creazione temporanea di link, indirizzi, rotte e metadati runtime dichiarati.
-- [ ] Aggiornare README, reference API, lifecycle, integrazione in-process,
+- [x] Aggiornare README, reference API, lifecycle, integrazione in-process,
   CI, architettura e changelog man mano che le funzionalità sono completate.
-- [ ] Qualificare TTP come consumatore e almeno un caso indipendente, per esempio
+- [x] Qualificare TTP come consumatore e almeno un caso indipendente, per esempio
   il gateway NAT degli esempi. Esplicitare politiche che restano ai consumatori.
 
 Completamento: esempi eseguiti automaticamente in un ambiente pulito, con artefatti
 e fallimenti intenzionali verificati; nessuna dipendenza da TTP per usarli.
+
+Esito: completata il 18 novembre 2026; dettagli e verifiche in
+[PHASE8-v2.2.0.md](PHASE8-v2.2.0.md). La suite di TTP usa anche una funzione
+privata di NSE (`_get_mac_address`): la sua compatibilità va verificata in fase 9.
 
 ## 9. Qualifica e preparazione della release
 

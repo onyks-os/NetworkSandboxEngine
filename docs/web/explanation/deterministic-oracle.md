@@ -101,6 +101,38 @@ expectation of `REJECT` is compared as `DROP`.
 
 ---
 
+## What the contract proves, and what it does not
+
+The canary, parser and liveness checks are NSE's strongest guarantee, and the
+reason a clean result can be trusted. Each is a positive control on the
+instrument itself:
+
+| Check | Proves |
+| :--- | :--- |
+| Readiness canary | The monitor delivers kernel events for packets on the injection path *before* the stimuli. |
+| Liveness canary | It still delivers them *after* the last stimulus: the stream is not truncated. |
+| Parser health | Every trace line was understood: a format change cannot hide verdicts. |
+| Read-loop health | The monitor ended cleanly, not by EOF, timeout or crash. |
+| Count check (CLI) | One verdict per expected stimulus, no more and no fewer. |
+
+They prove that the **trace oracle** observed the path the canaries took. They
+say nothing about a **capture**. `PCAPAsserter` readiness means its socket is
+armed and filtering on one interface. It does not mean that the traffic you
+care about crosses that interface.
+
+An empty capture is evidence of "nothing left" only next to a positive control
+that shows the same capture seeing the stimulus. Without one, it is no
+evidence at all. `examples/broken_observer.py` runs both failure modes, a blind
+oracle and a capture on the wrong interface, and shows each being caught for
+its own reason. The experiment report keeps these questions apart:
+
+* `result.oracle` and `outcome` describe the trace oracle;
+* each attached `CaptureReport` describes a capture;
+* caller-declared `PositiveControl` entries describe the evidence for the
+  assertion.
+
+---
+
 ## Proving the contract holds
 
 The guarantee above is itself tested. Setting `NSE_FORCE_BLIND=1` makes the

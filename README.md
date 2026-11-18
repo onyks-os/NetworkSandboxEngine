@@ -32,6 +32,7 @@ SPDX-License-Identifier: MIT
   <a href="#requirements">Requirements</a> •
   <a href="#installation">Installation</a> •
   <a href="#quickstart">Quickstart</a> •
+  <a href="#examples">Examples</a> •
   <a href="#how-it-works">How It Works</a> •
   <a href="#project-structure">Project Structure</a>
 </p>
@@ -44,10 +45,28 @@ Network Sandbox Engine (NSE) provides a safe, reproducible testing harness. It c
 
 Key architectural properties:
 
-* **Zero Host Mutation**: Rulesets are loaded exclusively into ephemeral sandbox namespaces (`nse_<uuid>`) and are completely removed during teardown.
+* **The host firewall is never touched**: the ruleset under test is loaded only inside the sandbox namespaces. What a run does create on the host is temporary and declared; see [What a run changes on the host](#what-a-run-changes-on-the-host).
 * **Self-verifying Oracle**: Every run injects a *canary* packet before the test packets and again after them, and reports a result only if the kernel trace for both was observed. See [The oracle contract](#the-oracle-contract).
 * **Dual-Stack and Topologies**: Native support for IPv4 and IPv6 traffic, plus multi-namespace Gateway topologies for router, NAT, and forwarding ruleset validation.
-* **Small, auditable surface**: One package, no web server, no JavaScript. `nse/` is ~1200 statements at 98% test coverage.
+* **Small, auditable surface**: One package, no web server, no JavaScript, with 98% test coverage enforced by a ratchet.
+
+### What a run changes on the host
+
+| Changed | Not changed |
+| :--- | :--- |
+| Network namespaces `nse_*` (`/var/run/netns`) | The host's nftables or iptables ruleset |
+| The host end of each veth link (`vhr-*`), with its addresses | Host sysctls: forwarding and DAD settings are set inside the namespaces |
+| In the gateway topology, routes to the sandbox subnets via that link | Existing interfaces, addresses and routes |
+| Ownership journals and locks under `/run/nse` | Anything outside the run's own records |
+
+Every one of these is recorded in an ownership journal before it is created,
+and removed at teardown, or by the next NSE start if a run was killed.
+Processes still running in a sandbox namespace are stopped before it is deleted.
+
+Setup refuses to start rather than shadow anything: an interface name already in
+use, or a sandbox subnet overlapping an existing host route, is an error before
+the kernel is touched. A cleanup that cannot prove ownership preserves the
+resource and says so.
 
 ### Requires root
 
@@ -93,24 +112,30 @@ non-zero. That job runs in CI on every push.
 
 `nft monitor trace` reports what the ruleset *decided*. It cannot report what
 left an interface the ruleset never matched on, which is the question a
-zero-leak claim actually asks. `PCAPAsserter` covers that: an `AsyncSniffer`
-wrapper that captures on a named interface and hands the frames back, so a test
-can assert that a stimulus produced **none**.
+zero-leak claim actually asks. `PCAPAsserter` covers that: it captures on a
+named interface, so a test can assert that a stimulus produced **no** frame.
 
 ```python
 from nse import PCAPAsserter
 
-asserter = PCAPAsserter(iface="veth-host")
-await asserter.start()
+asserter = PCAPAsserter(iface="vhr-...")
+await asserter.start()   # returns once the kernel socket is filtering and bound
 # ... send the stimulus ...
-leaked = await asserter.stop()
+leaked = await asserter.stop()   # raises CaptureError if the capture broke
 assert not leaked, leaked
 ```
 
-The same rule as the trace oracle applies, and it is the caller's to enforce: a
-sniffer that never attached and a firewall that blocked everything both return
-an empty list. Capture the stimulus once with the ruleset flushed and require
-the frame to be *seen* before asserting its absence.
+`stop()` raises when the capture itself failed, and `stop_report()` says
+whether the window was complete. Long captures can go to a PCAP file with
+bounded memory.
+
+None of that proves the capture was watching the path the stimulus took.
+Readiness means the socket was armed on *that* interface; it does not mean the
+stimulus crosses it. That evidence is the caller's to provide: capture the
+stimulus once where it must be seen, and require it to be *seen* before
+asserting its absence. [`examples/broken_observer.py`](examples/broken_observer.py)
+shows the claim "nothing leaves" passing on the wrong interface, and its
+positive control rejecting it.
 
 **The default filter suppresses link-local noise, and nothing else.**
 `DEFAULT_FILTER` excludes ARP and ICMPv6 types 133-137 - Neighbour Discovery,
@@ -134,7 +159,9 @@ and not icmp6`, which discarded routable ICMPv6 as well - see
   * **Gateway**: Router (`nse_router_<id>`) and Server (`nse_server_<id>`) chain for forwarding and NAT testing.
 * **Wire-level Leak Assertions**: `PCAPAsserter` captures on a named interface so a test can assert that a stimulus produced no frame at all. See [Asserting on the wire](#asserting-on-the-wire).
 * **Ownership-aware Cleanup**: Private journals and owner locks protect active runs. Startup recovery removes only verified abandoned resources; prefix matches without ownership evidence are preserved. Failed teardowns retain their records for retry. See [Namespace lifecycle](docs/web/explanation/namespace-lifecycle.md).
-* **CLI YAML Test Runner**: Execute declarative YAML test suites for automated CI/CD pipelines (`nse-runner`). Exits non-zero on a wrong verdict *and* on a verdict it failed to observe.
+* **CLI YAML Test Runner**: Execute declarative YAML test suites for automated CI/CD pipelines (`nse-runner`). Exits non-zero on a wrong verdict, on a verdict it failed to observe, and on a run that did not clean up. `--report-dir` keeps a JSON report and a SHA-256 manifest.
+* **Reproducible experiment reports**: `run_test_pipeline_report()` records input, environment, outcome, observations and timings, so a CI artifact is enough to reconstruct a run.
+* **Managed application processes**: real servers and clients run in the sandbox with a verified UID, GID and capabilities, timeouts, and a namespace-wide process boundary.
 * **Strict Quality Standards**: Full static type checking (`mypy --strict`), architectural boundary enforcement (`import-linter`), `ruff` formatting, and a coverage ratchet (`make coverage`, floor 98%).
 
 ---
@@ -267,6 +294,45 @@ podman run --rm --cap-add=NET_ADMIN --cap-add=NET_RAW \
 ```
 
 Useful for pinning the nftables version your rules are tested against.
+
+---
+
+## Examples
+
+[`examples/`](examples/) holds complete experiments, each with its input and
+expected output. CI runs every one of them on a real kernel:
+
+| Example | Shows |
+| :--- | :--- |
+| [`workstation.yaml`](examples/workstation.yaml) | A drop-by-default workstation policy, IPv4 and IPv6 |
+| [`ipv6.yaml`](examples/ipv6.yaml) | A service published over IPv6 only |
+| [`coexistence.yaml`](examples/coexistence.yaml) | An accept in one table does not override a drop in another |
+| [`gateway_nat.yaml`](examples/gateway_nat.yaml) | Forwarding and masquerade through the gateway topology |
+| [`real_application.py`](examples/real_application.py) | A real TCP/UDP server as `nobody`, a bounded file capture, positive controls |
+| [`broken_policy.py`](examples/broken_policy.py) | A wrong ruleset with a sound observer: caught |
+| [`broken_observer.py`](examples/broken_observer.py) | A blind oracle and a misplaced capture: both caught |
+
+```bash
+sudo nse-runner --file examples/gateway_nat.yaml
+sudo python3 examples/real_application.py
+```
+
+### Who relies on NSE, and what stays with them
+
+NSE is qualified against two independent consumers. One is
+[TransparentTorProxy](https://github.com/onyks-os/TransparentTorProxy) (TTP).
+Its test suite drives NSE's controller, rule engine, trace harvester, mock
+listeners and `PCAPAsserter` for rule and leak-containment tests. The other is
+the NAT gateway example above, which needs nothing from TTP. NSE guarantees the
+measurement: an observed verdict, a confirmed capture, a verified process
+identity, a clean teardown. Some decisions stay with the consumer:
+
+* which verdicts are correct, and what counts as a leak;
+* which positive control proves that a capture watches the path a stimulus
+  takes;
+* the topology and addresses, including a host whose routes collide with the
+  defaults;
+* retries, and what a failed run blocks in their pipeline.
 
 ---
 

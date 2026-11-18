@@ -100,7 +100,8 @@ class ProcessIdentity(BaseModel):
         description="Supplementary groups. None keeps them unless uid or gid is set, in "
         "which case they are cleared; () clears them explicitly.",
     )
-    capabilities: frozenset[str] | None = Field(
+    # set is accepted for convenience; the validator always stores a frozenset.
+    capabilities: frozenset[str] | set[str] | None = Field(
         default=None,
         description="Exactly the capabilities the process keeps: effective, permitted, "
         "ambient and bounding set. None leaves the kernel default: all for root, none "

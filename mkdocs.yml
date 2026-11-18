@@ -92,6 +92,7 @@ nav:
       - Test Suite YAML: tutorials/test-suites.md
       - Ruleset Debugging: tutorials/debugging-rulesets.md
       - Gateway Topology: tutorials/gateway-topology.md
+      - Worked Examples: tutorials/examples.md
   - How-To Guides:
       - Embedding NSE in Python: how-to/in-process-integration.md
       - Custom Packet Specs: how-to/custom-packets.md

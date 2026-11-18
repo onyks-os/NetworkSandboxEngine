@@ -121,6 +121,17 @@ minor release under Semantic Versioning. See `docs/PLAN-v2.2.0.md`.
   `manifest.json` (SHA-256 of every artifact). Both are written atomically, also
   for a failed, unreadable or interrupted suite. `--timeout SECONDS` bounds
   each case.
+- `examples/`: complete experiments with their expected output, which need
+  nothing but NSE:
+  - YAML suites: a workstation firewall, an IPv6-only service, coexisting
+    tables and a NAT gateway;
+  - a real TCP/UDP application running as `nobody`, with a bounded file
+    capture and positive controls;
+  - two experiments that must fail: a wrong policy with a sound observer, and a
+    sound policy with a blind oracle or a misplaced capture.
+
+  CI runs all of them on a real kernel (`tests/test_examples.py`) and checks
+  their exit codes and artifacts. ruff and mypy check them as well.
 - Mock listeners are managed processes that confirm their bind
   (`nse.core.mock_listener.start_listener`). The pipeline starts one per
   protocol and port and reports a bind failure as a setup error, never as an
@@ -175,6 +186,19 @@ minor release under Semantic Versioning. See `docs/PLAN-v2.2.0.md`.
   3.10, including `pip check` and the coverage gate.
 
 ### Documentation
+
+- The generic "Zero Host Mutation" claim is replaced by the exact guarantee.
+  The ruleset under test, forwarding and DAD settings stay inside the
+  namespaces, and the host firewall is never touched. A run does create, and
+  journal, temporary namespaces, the host end of its veth links with their
+  addresses, gateway routes, and ownership records under `/run/nse`.
+- The oracle explanation now presents the canary, parser and liveness checks as
+  the guarantee they are. It also states that capture readiness does not prove
+  a stimulus crossed the captured interface.
+- The namespace lifecycle documents the process boundary.
+- A new "Worked Examples" page shows the expected output of each example.
+- The README names NSE's qualifying consumers, TransparentTorProxy and the NAT
+  gateway example, and lists the decisions that stay with consumers.
 
 - **The README no longer opens with a screenshot of the web interface this
   project removed.** `assets/preview.png` showed the FastAPI/Svelte GUI archived

@@ -129,9 +129,25 @@ description. An inherited controller cannot mutate ownership state: create a
 new controller in the child. Reusing a controller from a different network
 namespace is also rejected.
 
-Removing a namespace name does not terminate processes holding that namespace.
-This lifecycle manages network resources, not arbitrary applications or their
-descendants. Application process ownership and termination are separate work.
+## Processes and the namespace boundary
+
+Removing a namespace name alone would not stop the processes inside it: they
+would keep the namespace alive, unnamed and unreachable. So before NSE deletes a
+namespace, at teardown or during crash recovery, it stops every process whose
+network namespace is that one: SIGTERM, a grace period, then SIGKILL. This
+covers processes NSE started, anything they left behind (even detached with
+`setsid`), and anything else running there.
+
+- **Membership** is checked through a pidfd: a PID that was recycled after it
+  was listed is never signalled. Recovery therefore needs no record of PIDs;
+  the namespace itself is the record.
+- **Refusal:** NSE's own network namespace and PID 1's are never swept.
+- **Outside the boundary:** a process that moved itself to another network
+  namespace, which requires `CAP_SYS_ADMIN`.
+
+Managed processes (`start_process()`) are additionally stopped as a process
+group, with a verified identity; see
+[managed processes](../how-to/in-process-integration.md#managed-processes-identity-timeouts-process-trees).
 
 Resources without sufficient proof stay untouched, with warnings:
 
