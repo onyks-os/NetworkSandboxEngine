@@ -76,6 +76,16 @@ minor release under Semantic Versioning. See `docs/PLAN-v2.2.0.md`.
 - `NamespaceSandbox.exec_argv(argv)`: runs a program in the namespace with
   exactly the given arguments (no shell, no splitting), validated before
   anything starts. Same result and `CalledProcessError` contract as `exec()`.
+- Bounded captures: `PCAPAsserter(output=...)` writes a readable PCAP file
+  progressively and keeps only a declared in-memory sample (none by default).
+  `limits=nse.CaptureLimits(...)` bounds packets, duration, file size and
+  stored packets/bytes. The report gains `output_mode`, `limits`,
+  `limits_reached`, `bytes_stored`, `packets_written`, `bytes_written`,
+  `artifacts` and `artifact_complete`, the termination `limit_reached` and the
+  start failure `output_unavailable`. Without `output=` or `limits=` every
+  packet is kept, as before. A full disk or a write, flush or close error makes
+  the instrument unhealthy, and no limit, slow writer or file error can produce
+  a report that claims a complete window.
 
 ### Changed
 

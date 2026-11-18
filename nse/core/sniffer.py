@@ -27,6 +27,17 @@ shared by :meth:`PCAPAsserter.stop` (historic ``list[Packet]`` API) and
 :meth:`PCAPAsserter.stop_report`. ``stop()`` raises :class:`CaptureError` when
 the instrument was not healthy, so a broken capture can no longer look like an
 empty, successful one.
+
+Bounded captures
+----------------
+By default every packet is kept in memory, as before. With ``output=`` the
+capture writes a PCAP file progressively from the capture thread and keeps only
+a bounded sample in memory (none unless one is declared). :class:`CaptureLimits`
+bounds packets, duration, file size and stored bytes; reaching any of them is
+listed in the report. There is no writer queue: the file is written by the
+thread that reads the socket, so the kernel socket buffer is the only queue, and
+a writer too slow to keep up shows up as kernel drops (``window_complete`` is
+then ``False``), never as unbounded memory.
 """
 
 from __future__ import annotations
@@ -45,7 +56,15 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Literal
 
 from nse.core.async_work import finish_work
-from nse.models.capture_report import CaptureReport, StartFailure, Termination
+from nse.models.capture_report import (
+    PCAP_HEADER_BYTES,
+    PCAP_RECORD_HEADER_BYTES,
+    CaptureLimits,
+    CaptureReport,
+    LimitName,
+    StartFailure,
+    Termination,
+)
 
 if TYPE_CHECKING:
     from scapy.packet import Packet
@@ -86,6 +105,17 @@ _SOL_PACKET = 263
 _PACKET_STATISTICS = 6
 _BACKEND = "scapy-l2listen"
 
+#: Classic PCAP (microsecond timestamps), written little-endian.
+_PCAP_MAGIC = 0xA1B2C3D4
+_PCAP_SNAPLEN = 262144
+#: Linux ARPHRD_* hardware type of the bound socket -> PCAP LINKTYPE_*. Loopback
+#: frames carry an Ethernet header on Linux; ARPHRD_NONE (tun) delivers raw IP.
+_ARPHRD_TO_LINKTYPE = {1: 1, 772: 1, 65534: 101}
+#: Buffer for the PCAP file; flushed when it fills, when the capture is idle for
+#: _FLUSH_IDLE seconds, and on close.
+_WRITE_BUFFER = 64 * 1024
+_FLUSH_IDLE = 1.0
+
 State = Literal["created", "starting", "running", "finished"]
 
 
@@ -114,8 +144,14 @@ class CaptureStateError(RuntimeError):
     """The capture was used out of order (double start, stop before start)."""
 
 
+class _OutputError(OSError):
+    """The PCAP file could not be prepared; classified as ``output_unavailable``."""
+
+
 def _classify(exc: BaseException) -> StartFailure:
     text = str(exc)
+    if isinstance(exc, _OutputError):
+        return "output_unavailable"
     if isinstance(exc, PermissionError) or getattr(exc, "errno", None) in (
         errno.EPERM,
         errno.EACCES,
@@ -160,11 +196,64 @@ def _read_stats(sock: Any) -> tuple[int, int]:
     return packets, drops
 
 
-def _packet_length(packet: Any) -> int:
+def _raw_bytes(packet: Any) -> bytes:
+    """The bytes as received; re-serialised only when the original is not kept."""
     original = getattr(packet, "original", None)
     if isinstance(original, (bytes, bytearray)):
-        return len(original)
-    return len(bytes(packet))
+        return bytes(original)
+    return bytes(packet)
+
+
+def _linktype(sock: Any) -> int:
+    """PCAP link type of the frames *sock* delivers, from its bound hardware type."""
+    hatype = sock.ins.getsockname()[3]
+    try:
+        return _ARPHRD_TO_LINKTYPE[hatype]
+    except KeyError:
+        raise _OutputError(
+            errno.EOPNOTSUPP, f"PCAP output is not supported for link type ARPHRD {hatype}"
+        ) from None
+
+
+class _PcapFile:
+    """Classic PCAP file written progressively; created exclusively, never overwritten."""
+
+    def __init__(self, path: str, linktype: int) -> None:
+        self.path = path
+        try:
+            self._file = open(path, "xb", buffering=_WRITE_BUFFER)  # noqa: SIM115 - closed in close()
+        except OSError as exc:
+            raise _OutputError(exc.errno, f"cannot create PCAP file {path!r}: {exc}") from exc
+        header = struct.pack("<IHHiIII", _PCAP_MAGIC, 2, 4, 0, 0, _PCAP_SNAPLEN, linktype)
+        try:
+            self._file.write(header)
+            self._file.flush()
+        except OSError as exc:
+            with contextlib.suppress(OSError):
+                self._file.close()
+            raise _OutputError(exc.errno, f"cannot write PCAP header to {path!r}: {exc}") from exc
+        self.packets = 0
+        self.bytes = PCAP_HEADER_BYTES
+        self.dirty = False
+
+    def write(self, timestamp: float, raw: bytes) -> None:
+        seconds = int(timestamp)
+        micros = round((timestamp - seconds) * 1_000_000)
+        if micros >= 1_000_000:
+            seconds, micros = seconds + 1, micros - 1_000_000
+        length = len(raw)
+        self._file.write(struct.pack("<IIII", seconds, micros, length, length))
+        self._file.write(raw)
+        self.packets += 1
+        self.bytes += PCAP_RECORD_HEADER_BYTES + length
+        self.dirty = True
+
+    def flush(self) -> None:
+        self._file.flush()
+        self.dirty = False
+
+    def close(self) -> None:
+        self._file.close()
 
 
 class _CaptureLoop(threading.Thread):
@@ -175,18 +264,33 @@ class _CaptureLoop(threading.Thread):
         iface: str,
         bpf: str,
         on_ready: Callable[[BaseException | None], None],
+        limits: CaptureLimits | None = None,
+        output: str | None = None,
     ) -> None:
         super().__init__(name=f"nse-capture-{iface}", daemon=True)
         self.iface = iface
         self.bpf = bpf
         self._on_ready = on_ready
+        self.limits = limits or CaptureLimits()
+        self.output = output
         self._wake_r, self._wake_w = os.pipe()
         # Guards the pipe fds: a stop request must never write to a descriptor
         # the loop has already closed (its number may belong to another file).
         self._fd_lock = threading.Lock()
         self.stop_requested = threading.Event()
         self.packets: list[Packet] = []
+        self.observed = 0
         self.bytes = 0
+        self.stored_bytes = 0
+        self.storing = True
+        self.writer: _PcapFile | None = None
+        self.writing = True
+        self.writer_failed = False
+        self.written: int | None = None
+        self.written_bytes: int | None = None
+        self.limits_reached: list[LimitName] = []
+        self.ended_by_limit = False
+        self.socket_failed = False  # the socket itself broke: nothing left to drain
         self.started_at: float | None = None
         self.stopped_at: float | None = None
         self.errors: list[str] = []
@@ -206,7 +310,13 @@ class _CaptureLoop(threading.Thread):
         try:
             try:
                 sock = _open_socket(self.iface, self.bpf)
+                if self.output is not None:
+                    self.writer = _PcapFile(self.output, _linktype(sock))
             except BaseException as exc:
+                if sock is not None:  # opened, but the file could not be: never ready
+                    with contextlib.suppress(Exception):
+                        sock.close()
+                    sock = None
                 self.start_error = exc
                 self._on_ready(exc)
                 return
@@ -218,10 +328,12 @@ class _CaptureLoop(threading.Thread):
             self._on_ready(None)
             self._loop(sock)
         except BaseException as exc:
+            self.socket_failed = True
             self.errors.append(f"capture loop failed: {exc!r}")
         finally:
             if sock is not None:
                 self._finish(sock)
+            self._close_writer()
             self.close_pipe()
             self.stopped_at = time.time()
 
@@ -233,21 +345,105 @@ class _CaptureLoop(threading.Thread):
                         os.close(fd)
             self._wake_r = self._wake_w = -1
 
-    def _read_one(self, sock: Any) -> None:
+    def _reach(self, name: LimitName) -> None:
+        if name not in self.limits_reached:
+            self.limits_reached.append(name)
+
+    def _store(self, packet: Packet, size: int) -> None:
+        if not self.storing:
+            return
+        limits = self.limits
+        if limits.max_stored_packets is not None and len(self.packets) >= limits.max_stored_packets:
+            self.storing = False
+            self._reach("max_stored_packets")
+        elif (
+            limits.max_stored_bytes is not None
+            and self.stored_bytes + size > limits.max_stored_bytes
+        ):
+            self.storing = False
+            self._reach("max_stored_bytes")
+        else:
+            self.packets.append(packet)
+            self.stored_bytes += size
+
+    def _write(self, packet: Packet, raw: bytes) -> None:
+        writer = self.writer
+        if writer is None or not self.writing:
+            return
+        limit = self.limits.max_file_bytes
+        if limit is not None and writer.bytes + PCAP_RECORD_HEADER_BYTES + len(raw) > limit:
+            self.writing = False  # keep the file a contiguous prefix of the capture
+            self._reach("max_file_bytes")
+            return
+        try:
+            writer.write(float(packet.time), raw)
+        except Exception as exc:
+            self.writing = False
+            self.writer_failed = True
+            self.errors.append(f"PCAP write failed: {exc!r}")
+
+    def _flush(self) -> None:
+        writer = self.writer
+        if writer is None or self.writer_failed or not writer.dirty:
+            return
+        try:
+            writer.flush()
+        except Exception as exc:
+            self.writing = False
+            self.writer_failed = True
+            self.errors.append(f"PCAP flush failed: {exc!r}")
+
+    def _close_writer(self) -> None:
+        writer = self.writer
+        if writer is None:
+            return
+        self.writer = None
+        try:
+            writer.close()
+        except Exception as exc:
+            self.writer_failed = True
+            self.errors.append(f"PCAP close failed: {exc!r}")
+        self.written = writer.packets
+        self.written_bytes = writer.bytes
+
+    def _read_one(self, sock: Any) -> bool:
+        """Read one packet; ``False`` once max_packets is reached."""
         packet = sock.recv()
         if packet is None:
-            return
+            return True
         packet.sniffed_on = self.iface
-        self.bytes += _packet_length(packet)
-        self.packets.append(packet)
+        raw = _raw_bytes(packet)
+        self.observed += 1
+        self.bytes += len(raw)
+        self._store(packet, len(raw))
+        self._write(packet, raw)
+        limit = self.limits.max_packets
+        if limit is not None and self.observed >= limit:
+            self._reach("max_packets")
+            return False
+        return True
 
     def _loop(self, sock: Any) -> None:
+        duration = self.limits.max_duration
+        deadline = None if duration is None else time.monotonic() + duration
         while not self.stop_requested.is_set():
-            readable, _, broken = select.select([sock.ins, self._wake_r], [], [sock.ins])
+            timeout = None if self.writer is None else _FLUSH_IDLE
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    self._reach("max_duration")
+                    self.ended_by_limit = True
+                    return
+                timeout = remaining if timeout is None else min(timeout, remaining)
+            readable, _, broken = select.select([sock.ins, self._wake_r], [], [sock.ins], timeout)
             if broken:
                 raise OSError("socket reported an exceptional condition")
             if sock.ins in readable:
-                self._read_one(sock)
+                if not self._read_one(sock):
+                    self.ended_by_limit = True
+                    return
+            elif not readable:
+                self._flush()  # idle: make the file current
 
     def _finish(self, sock: Any, drain_budget: float = 1.0) -> None:
         """Read the kernel counters, then drain everything already queued, then close.
@@ -260,14 +456,16 @@ class _CaptureLoop(threading.Thread):
                 self.kernel = _read_stats(sock)
             except Exception as exc:
                 self.stats_reason = f"PACKET_STATISTICS unavailable: {exc}"
-        if not self.errors:
+        # A file error does not stop the drain: the counters must stay meaningful.
+        if not self.socket_failed and "max_packets" not in self.limits_reached:
             deadline = time.monotonic() + drain_budget
             try:
                 while select.select([sock.ins], [], [], 0)[0]:
                     if time.monotonic() >= deadline:
                         self.errors.append("stop drain budget exhausted with packets still queued")
                         break
-                    self._read_one(sock)
+                    if not self._read_one(sock):
+                        break
             except Exception as exc:
                 self.errors.append(f"drain failed: {exc!r}")
         try:
@@ -289,6 +487,8 @@ class PCAPAsserter:
         filter: str | None = None,
         *,
         replace_default_filter: bool = False,
+        output: str | os.PathLike[str] | None = None,
+        limits: CaptureLimits | None = None,
     ) -> None:
         """
         Arm a sniffer on *iface*.
@@ -299,7 +499,24 @@ class PCAPAsserter:
         in the kernel: a packet it excludes never reaches userspace, so a caller
         that needs to assert on suppressed traffic cannot compensate downstream.
         Combining is the safe default; replacing is the escape hatch.
+
+        *output* switches to file mode: packets are written progressively to a
+        new PCAP file at that path (an existing file is never overwritten; that
+        is a start failure), and memory keeps only a sample, by default none
+        (``max_stored_packets=0``). *limits* bounds the capture in either mode;
+        see :class:`~nse.models.capture_report.CaptureLimits`.
         """
+        limits = limits or CaptureLimits()
+        if output is None and limits.max_file_bytes is not None:
+            raise ValueError("max_file_bytes needs an output file")
+        if (
+            output is not None
+            and limits.max_stored_packets is None
+            and limits.max_stored_bytes is None
+        ):
+            limits = limits.model_copy(update={"max_stored_packets": 0})
+        self.output = None if output is None else os.path.abspath(os.fspath(output))
+        self.limits = limits
         self.iface = iface
         self.requested_filter = filter
         self.replace_default_filter = bool(filter) and replace_default_filter
@@ -350,7 +567,7 @@ class PCAPAsserter:
             with contextlib.suppress(RuntimeError):  # loop closed: nobody is waiting
                 loop.call_soon_threadsafe(resolve)
 
-        thread = _CaptureLoop(self.iface, self.filter, on_ready)
+        thread = _CaptureLoop(self.iface, self.filter, on_ready, self.limits, self.output)
         self._loop_thread = thread
         try:
             thread.start()
@@ -390,10 +607,13 @@ class PCAPAsserter:
         """Stop the capture and return the packets it stored.
 
         Raises :class:`CaptureError` when the instrument was not healthy (start
-        failure, backend crash, stop timeout, socket errors): an empty list is
-        only ever returned for a capture that worked and saw nothing. Kernel
-        drops do not raise here; they are logged and reported by
-        :meth:`stop_report` as ``window_complete=False``.
+        failure, backend crash, stop timeout, socket or file errors): an empty
+        list is only ever returned for a capture that worked and kept everything
+        it saw, or for a bounded capture whose report says otherwise. Kernel
+        drops and reached limits do not raise here; they are logged and reported
+        by :meth:`stop_report` (``window_complete=False``). In file mode, or with
+        ``max_stored_*`` limits, the list is only the declared sample: assert on
+        the report and its counters, not on the list.
         """
         report = await self.stop_report(timeout)
         if not report.instrument_healthy:
@@ -404,9 +624,25 @@ class PCAPAsserter:
             )
         if report.kernel_drops:
             logger.warning(
-                "capture on %s: kernel dropped %d packet(s); the list is incomplete",
+                "capture on %s: kernel dropped %d packet(s); the capture is incomplete",
                 self.iface,
                 report.kernel_drops,
+            )
+        if report.packets_stored < report.packets_observed:
+            logger.warning(
+                "capture on %s: returning %d of %d packet(s) observed (%s mode, limits %s); "
+                "use stop_report() for the counters",
+                self.iface,
+                report.packets_stored,
+                report.packets_observed,
+                report.output_mode,
+                report.limits_reached,
+            )
+        if report.termination == "limit_reached":
+            logger.warning(
+                "capture on %s ended itself at %s before stop() was called",
+                self.iface,
+                report.limits_reached,
             )
         assert self._loop_thread is not None
         return list(self._loop_thread.packets)
@@ -460,6 +696,8 @@ class PCAPAsserter:
         elif alive:
             termination = "stop_timeout"
             errors.append(f"capture loop still running {timeout}s after stop was requested")
+        elif ended_early and thread.ended_by_limit:
+            termination = "limit_reached"
         elif ended_early:
             termination = "backend_terminated"
             if not errors:  # pragma: no cover - the loop only exits early by raising
@@ -478,6 +716,8 @@ class PCAPAsserter:
                 else "counters not read before the capture ended"
             )
 
+        written, written_bytes, artifacts, artifact_complete = self._artifact_state(thread, alive)
+
         from scapy import VERSION as scapy_version
 
         self._report = CaptureReport(
@@ -487,6 +727,8 @@ class PCAPAsserter:
             default_filter_replaced=self.replace_default_filter,
             backend=_BACKEND,
             backend_version=str(scapy_version),
+            output_mode="memory" if self.output is None else "file",
+            limits=self.limits,
             termination=termination,
             start_failure=self._start_failure,
             errors=errors,
@@ -494,12 +736,32 @@ class PCAPAsserter:
             started_at=thread.started_at,
             stop_requested_at=self._stop_requested_at,
             stopped_at=None if alive else thread.stopped_at,
-            packets_observed=len(thread.packets),
+            packets_observed=thread.observed,
             bytes_observed=thread.bytes,
             packets_stored=len(thread.packets),
-            packets_written=None,
-            artifacts=[],
+            bytes_stored=thread.stored_bytes,
+            packets_written=written,
+            bytes_written=written_bytes,
+            artifacts=artifacts,
+            artifact_complete=artifact_complete,
+            limits_reached=list(thread.limits_reached),
             kernel_packets=kernel[0] if kernel else None,
             kernel_drops=kernel[1] if kernel else None,
             stats_unavailable_reason=None if kernel else reason,
         )
+
+    def _artifact_state(
+        self, thread: _CaptureLoop, alive: bool
+    ) -> tuple[int | None, int | None, list[str], bool | None]:
+        """File-mode fields of the report: what was written and whether it is whole."""
+        if self.output is None:
+            return None, None, [], None
+        if thread.written is None:  # never opened, or the thread still owns it
+            if alive and thread.writer is not None:
+                return thread.writer.packets, thread.writer.bytes, [self.output], False
+            return None, None, [], False
+        size = thread.written_bytes
+        with contextlib.suppress(OSError):
+            size = os.stat(self.output).st_size  # what is really on disk
+        complete = not alive and not thread.writer_failed and thread.written == thread.observed
+        return thread.written, size, [self.output], complete

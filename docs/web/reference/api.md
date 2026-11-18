@@ -58,6 +58,10 @@ so anything it excludes never reaches userspace.
 `stop_report()` returns the `CaptureReport` documented below; `stop()` keeps
 returning `list[Packet]` and raises `CaptureError` for an unhealthy capture.
 
+`output=` writes the capture progressively to a PCAP file and keeps only a
+bounded sample in memory; `limits=` takes a `CaptureLimits` (also exported from
+`nse`). See [bounded captures](../how-to/in-process-integration.md#long-captures-with-bounded-memory).
+
 ::: nse.core.sniffer
     options:
       show_root_heading: true

@@ -8,7 +8,7 @@ from importlib.metadata import version as _version
 
 from .core.netns_controller import NetnsController
 from .core.sniffer import CaptureError, CaptureStartError, CaptureStateError, PCAPAsserter
-from .models.capture_report import CaptureReport
+from .models.capture_report import CaptureLimits, CaptureReport
 
 try:
     # Read the version from installed metadata rather than restating it here.
@@ -20,6 +20,7 @@ except PackageNotFoundError:  # pragma: no cover - running from a bare checkout
 
 __all__ = [
     "CaptureError",
+    "CaptureLimits",
     "CaptureReport",
     "CaptureStartError",
     "CaptureStateError",

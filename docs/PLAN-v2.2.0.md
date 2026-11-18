@@ -1,6 +1,6 @@
 # NSE v2.2.0 — piano di lavoro
 
-Stato: fasi 0–4 completate; prossima fase 5. Aggiornato: 17 novembre 2026.
+Stato: fasi 0–5 completate; prossima fase 6. Aggiornato: 18 novembre 2026.
 
 Obiettivo: rendere verificabili proprietà delle risorse, disponibilità degli
 osservatori e completezza dei risultati, mantenendo il motore piccolo e le API
@@ -202,21 +202,26 @@ Esito: completata il 17 novembre 2026; dettagli e verifiche in
 
 ## 5. Catture prolungate con memoria limitata
 
-- [ ] Aggiungere modalità esplicita su file con `store=False`, scrittura
+- [x] Aggiungere modalità esplicita su file con `store=False`, scrittura
   progressiva e accumulazione di soli contatori/campioni limitati in memoria.
-- [ ] Offrire limiti distinti per pacchetti, byte conservati, durata e dimensione
+- [x] Offrire limiti distinti per pacchetti, byte conservati, durata e dimensione
   dell'artefatto; documentare il comportamento al raggiungimento di ciascuno.
-- [ ] Limitare anche eventuali code del writer e dimensione dei campioni. Non
+- [x] Limitare anche eventuali code del writer e dimensione dei campioni. Non
   ricostruire tutta la lista dal PCAP al momento dello stop.
-- [ ] Riportare errori di scrittura/flush/chiusura, saturazione, limiti raggiunti
+- [x] Riportare errori di scrittura/flush/chiusura, saturazione, limiti raggiunti
   e file parziali nel rapporto. Esplicitare i contatori disponibili dal backend.
-- [ ] Mantenere la cattura in memoria come default. In modalità limitata, la
+- [x] Mantenere la cattura in memoria come default. In modalità limitata, la
   lista restituita contiene solo il campione dichiarato; gli esempi usano il
   rapporto e i contatori, evitando `assert not packets` su un campione vuoto.
 
 Completamento: cattura lunga con memoria contenuta secondo limiti dichiarati;
 PCAP rileggibile; disco pieno, writer lento e limite raggiunto non producono un
 rapporto di cattura completa. La configurazione storica conserva tutti i pacchetti.
+
+Esito: completata il 18 novembre 2026; dettagli e verifiche in
+[PHASE5-v2.2.0.md](PHASE5-v2.2.0.md). La modalità su file si attiva con
+`output=` (memoria limitata a un campione, vuoto salvo dichiarazione) anziché
+con un flag `store=False` separato.
 
 ## 6. Processi applicativi gestiti
 

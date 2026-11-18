@@ -227,7 +227,7 @@ of raising:
 report = await asserter.stop_report()
 report.instrument_healthy   # armed, ran until asked to stop, no backend error
 report.window_complete      # True / False / None (unknown: counters unavailable)
-report.termination          # "stopped", "start_failed", "backend_terminated", ...
+report.termination          # "stopped", "limit_reached", "start_failed", ...
 report.kernel_drops         # PACKET_STATISTICS drops, or None - never a guessed 0
 report.effective_filter     # the BPF expression actually attached
 report.model_dump_json()    # for CI artefacts
@@ -240,6 +240,70 @@ nothing remained unread. When the counters are unavailable this is `None`, not
 `True`. **Evidence sufficiency** is not in the report at all. A healthy, complete
 capture of an empty interface still does not prove that your stimulus took that
 path, which is why the positive control below is still required.
+
+### Long captures with bounded memory
+
+By default every captured packet is kept in memory and returned by `stop()`,
+exactly as before. For a capture that runs for minutes or sees heavy traffic,
+write it to a file instead and keep only counters in memory:
+
+```python
+from nse import CaptureLimits, PCAPAsserter
+
+asserter = PCAPAsserter(
+    iface="veth-host",
+    output="artefacts/leak-check.pcap",  # a new file: an existing one is never overwritten
+    limits=CaptureLimits(max_duration=300, max_file_bytes=200_000_000),
+)
+await asserter.start()
+# ... a long stimulus ...
+report = await asserter.stop_report()
+
+assert report.instrument_healthy, report.errors
+assert report.window_complete is True, report       # nothing dropped, nothing cut off
+assert report.packets_observed == 0, report.artifacts  # the leak assertion: on the counter
+```
+
+With `output=` the capture thread writes each packet to the PCAP file as it
+reads it. The file header is on disk once `start()` returns, the file is
+flushed whenever the capture is idle for a second, and it stays readable by
+tcpdump, Wireshark or `scapy.utils.rdpcap` even when it is cut short. Memory
+holds only a sample, which is **empty unless you declare one** with
+`max_stored_packets` or `max_stored_bytes`. `stop()` then returns that sample,
+so in file mode **assert on the report, never on the list**: `assert not await
+asserter.stop()` would pass even if packets leaked.
+
+Every limit is optional, and reaching one is listed in `report.limits_reached`:
+
+| Limit | When it is reached | `window_complete` |
+| :--- | :--- | :--- |
+| `max_packets` | The capture ends itself after reading that many packets; later ones are not read. `termination` is `limit_reached`. | `False` |
+| `max_duration` | The capture ends itself that many seconds after readiness, after draining what was already queued. `termination` is `limit_reached`. | `False` |
+| `max_file_bytes` | File mode only. The first packet that would grow the file past the size, and every packet after it, is counted but not written: the file is a prefix of the capture. `artifact_complete` is `False`. | `False` |
+| `max_stored_packets` | Later packets are counted (and written, in file mode) but not kept in memory. | `False` in memory mode; unaffected in file mode, where the file is the record |
+| `max_stored_bytes` | Same, counted in bytes of packet data. | As above |
+
+A capture ended by a limit is still a healthy instrument: `stop()` does not
+raise, but it logs a warning and the report says the window is incomplete. A
+file that cannot be written is a different matter. A full disk, or a write,
+flush or close error, appears in `report.errors`, makes the instrument
+unhealthy, and `stop()` raises `CaptureError`. The packets keep being counted,
+and the partial file is listed in `report.artifacts` with
+`artifact_complete=False`.
+
+There is no queue between the socket and the file: the thread that reads the
+socket also writes the file. A writer that cannot keep up therefore fills the
+kernel socket buffer, and the kernel counts what it then drops (`kernel_drops`,
+`window_complete=False`). A writer that hangs (for example on a stalled network
+filesystem) makes `stop()` end with `termination="stop_timeout"`. Neither case
+grows memory, and neither can produce a report that claims a complete capture.
+
+The counters come from two places. `packets_observed` and `bytes_observed` are
+what NSE read from the socket. `kernel_packets` and `kernel_drops` are the
+kernel's `PACKET_STATISTICS` since readiness: every packet that passed the BPF
+filter, and the ones dropped because the buffer was full. `packets_written` and
+`bytes_written` describe the file. If the file is incomplete, it may hold fewer
+packets than were handed to it.
 
 ### Always pair it with a positive control
 

@@ -8,21 +8,33 @@ counters are simulated.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import errno
+import gc
 import json
 import os
 import socket
 import threading
 import time
 from collections.abc import Callable, Iterator
+from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
 import pytest
+from pydantic import ValidationError
 from scapy.error import Scapy_Exception
 from scapy.packet import Raw
+from scapy.utils import rdpcap
 
-from nse import CaptureError, CaptureReport, CaptureStartError, CaptureStateError, PCAPAsserter
+from nse import (
+    CaptureError,
+    CaptureLimits,
+    CaptureReport,
+    CaptureStartError,
+    CaptureStateError,
+    PCAPAsserter,
+)
 from nse.core import sniffer
 from nse.core.sniffer import DEFAULT_FILTER
 
@@ -63,6 +75,7 @@ class Backend:
         self.open_gate: threading.Event | None = None
         self.stats: tuple[int, int] | None = (0, 0)
         self.stats_calls = 0
+        self.linktype = 1
 
     def open(self, iface: str, bpf: str) -> FakeSocket:
         self.iface, self.bpf = iface, bpf
@@ -85,6 +98,7 @@ def backend() -> Iterator[Backend]:
     with (
         patch.object(sniffer, "_open_socket", fake.open),
         patch.object(sniffer, "_read_stats", fake.read_stats),
+        patch.object(sniffer, "_linktype", lambda sock: fake.linktype),
     ):
         yield fake
     if fake.open_gate is not None:
@@ -110,6 +124,7 @@ def _wait_for(condition: Callable[[], bool], timeout: float) -> bool:
 
 
 def _open_fds() -> int:
+    gc.collect()  # a socket an earlier test dropped must not close mid-measurement
     return len(os.listdir("/proc/self/fd"))
 
 
@@ -465,17 +480,17 @@ async def test_read_stats_decodes_tpacket_stats() -> None:
     assert sniffer._read_stats(Sock()) == (7, 2)
 
 
-async def test_packet_length_falls_back_to_serialisation() -> None:
+async def test_raw_bytes_fall_back_to_serialisation() -> None:
     packet = Raw(b"abcd")
     packet.original = None  # e.g. a packet rebuilt by a session
-    assert sniffer._packet_length(packet) == 4
+    assert sniffer._raw_bytes(packet) == b"abcd"
 
 
 async def test_exceptional_socket_condition_terminates_the_backend(backend: Backend) -> None:
     real_select = sniffer.select.select
 
     def broken(read: list[Any], write: list[Any], exc: list[Any], *timeout: float) -> Any:
-        if not timeout:  # the blocking wait of the capture loop
+        if not timeout or timeout[0] is None:  # the blocking wait of the capture loop
             return [], [], [backend.socket.ins]
         return real_select(read, write, exc, *timeout)
 
@@ -539,3 +554,404 @@ async def test_a_thread_that_cannot_start_leaves_no_descriptor(backend: Backend)
     report = await asserter.stop_report()
     asserter._shutdown(1.0)  # idempotent once the report exists
     assert await asserter.stop_report() is report
+
+
+# --------------------------------------------------------------------------- file mode and limits
+
+
+def _payloads(count: int, prefix: str = "packet") -> list[bytes]:
+    return [f"{prefix}-{index:04d}".encode() for index in range(count)]
+
+
+def _send_all(backend: Backend, payloads: list[bytes]) -> None:
+    for payload in payloads:
+        backend.socket.send(payload)
+
+
+def _pcap_payloads(path: Path) -> list[bytes]:
+    return [bytes(packet) for packet in rdpcap(str(path))]
+
+
+async def test_file_mode_writes_a_readable_pcap_and_keeps_no_packets_in_memory(
+    backend: Backend, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    path = tmp_path / "capture.pcap"
+    payloads = _payloads(300)
+    asserter = PCAPAsserter("veth0", output=path)
+    await asserter.start()
+    _send_all(backend, payloads)
+    backend.stats = (300, 0)
+    assert await asserter.stop() == []  # the declared sample: none
+    assert "returning 0 of 300 packet(s)" in caplog.text
+    assert asserter._loop_thread is not None
+    assert asserter._loop_thread.packets == []  # bounded memory, not a list rebuilt at stop
+
+    report = await asserter.stop_report()
+    assert report.output_mode == "file"
+    assert report.limits.max_stored_packets == 0  # the file-mode default, reported
+    assert report.packets_observed == report.packets_written == 300
+    assert report.packets_stored == report.bytes_stored == 0
+    assert report.limits_reached == ["max_stored_packets"]
+    assert report.artifacts == [str(path)]
+    assert report.artifact_complete is True
+    assert report.bytes_written == path.stat().st_size == 24 + sum(16 + len(p) for p in payloads)
+    assert report.instrument_healthy
+    assert report.window_complete is True  # the sample limit does not truncate the record
+    assert _pcap_payloads(path) == payloads
+
+
+async def test_file_mode_returns_only_the_declared_sample(backend: Backend, tmp_path: Path) -> None:
+    path = tmp_path / "capture.pcap"
+    payloads = _payloads(20)
+    asserter = PCAPAsserter("veth0", output=path, limits=CaptureLimits(max_stored_packets=3))
+    await asserter.start()
+    _send_all(backend, payloads)
+    backend.stats = (20, 0)
+    assert [bytes(p) for p in await asserter.stop()] == payloads[:3]
+    report = await asserter.stop_report()
+    assert report.packets_stored == 3
+    assert report.window_complete is True
+    assert _pcap_payloads(path) == payloads
+
+
+async def test_an_empty_file_capture_is_still_a_readable_pcap(
+    backend: Backend, tmp_path: Path
+) -> None:
+    path = tmp_path / "empty.pcap"
+    asserter = PCAPAsserter("veth0", output=str(path))
+    await asserter.start()
+    assert path.stat().st_size == 24  # the header is on disk once start() returns
+    report = await asserter.stop_report()
+    assert report.packets_written == 0
+    assert report.artifact_complete is True
+    assert len(rdpcap(str(path))) == 0
+
+
+async def test_relative_output_is_reported_as_an_absolute_path(
+    backend: Backend, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    asserter = PCAPAsserter("veth0", output="relative.pcap")
+    await asserter.start()
+    report = await asserter.stop_report()
+    assert report.artifacts == [str(tmp_path / "relative.pcap")]
+
+
+async def test_an_existing_file_is_never_overwritten(backend: Backend, tmp_path: Path) -> None:
+    path = tmp_path / "evidence.pcap"
+    path.write_bytes(b"previous run")
+    asserter = PCAPAsserter("veth0", output=path)
+    with pytest.raises(CaptureStartError) as caught:
+        await asserter.start()
+    assert caught.value.reason == "output_unavailable"
+    assert path.read_bytes() == b"previous run"
+    report = await asserter.stop_report()
+    assert report.start_failure == "output_unavailable"
+    assert report.artifacts == []  # not ours: never reported as this capture's artifact
+    assert report.artifact_complete is False
+    assert _wait_for(lambda: backend.socket.closed, 5)  # the socket opened first is released
+
+
+async def test_an_unsupported_link_type_fails_before_creating_the_file(
+    backend: Backend, tmp_path: Path
+) -> None:
+    path = tmp_path / "capture.pcap"
+    backend.socket.send(b"queued before readiness")
+
+    def unsupported(sock: Any) -> int:
+        raise sniffer._OutputError(errno.EOPNOTSUPP, "PCAP output is not supported")
+
+    with patch.object(sniffer, "_linktype", unsupported):
+        asserter = PCAPAsserter("veth0", output=path)
+        with pytest.raises(CaptureStartError) as caught:
+            await asserter.start()
+    assert caught.value.reason == "output_unavailable"
+    assert not path.exists()
+    report = await asserter.stop_report()
+    assert report.packets_observed == 0  # a socket that never became ready is not drained
+    assert backend.stats_calls == 0
+    assert backend.socket.closed
+
+
+async def test_linktype_follows_the_bound_hardware_type() -> None:
+    class Sock:
+        def __init__(self, hatype: int) -> None:
+            self.ins = self
+            self.hatype = hatype
+
+        def getsockname(self) -> tuple[Any, ...]:
+            return ("veth0", 3, 0, self.hatype, b"")
+
+    assert sniffer._linktype(Sock(1)) == 1  # Ethernet
+    assert sniffer._linktype(Sock(772)) == 1  # loopback frames carry an Ethernet header
+    assert sniffer._linktype(Sock(65534)) == 101  # tun: raw IP
+    with pytest.raises(sniffer._OutputError, match="ARPHRD 776"):
+        sniffer._linktype(Sock(776))
+
+
+async def test_header_write_failure_is_an_output_failure(tmp_path: Path) -> None:
+    path = tmp_path / "capture.pcap"
+    with patch("builtins.open") as opener:
+        opener.return_value.write.side_effect = OSError(errno.ENOSPC, "No space left on device")
+        with pytest.raises(sniffer._OutputError, match="PCAP header"):
+            sniffer._PcapFile(str(path), 1)
+        opener.return_value.close.assert_called_once()
+
+
+async def test_timestamps_are_split_without_overflowing_the_microseconds(tmp_path: Path) -> None:
+    path = tmp_path / "ts.pcap"
+    writer = sniffer._PcapFile(str(path), 1)
+    writer.write(1.9999999, b"carry")
+    writer.write(1700000000.25, b"quarter")
+    writer.close()
+    data = path.read_bytes()
+    first = data[24:40]
+    second = data[40 + 5 : 56 + 5]
+    assert first[:8] == (2).to_bytes(4, "little") + (0).to_bytes(4, "little")
+    assert second[:8] == (1700000000).to_bytes(4, "little") + (250000).to_bytes(4, "little")
+    assert [float(p.time) for p in rdpcap(str(path))] == [2.0, 1700000000.25]
+
+
+async def test_max_file_bytes_keeps_the_file_a_readable_prefix(
+    backend: Backend, tmp_path: Path
+) -> None:
+    path = tmp_path / "capped.pcap"
+    payloads = _payloads(100)  # 11 bytes each: 27 per record
+    limit = 24 + 27 * 10 + 26  # room for 10 records and almost an 11th
+    asserter = PCAPAsserter("veth0", output=path, limits=CaptureLimits(max_file_bytes=limit))
+    await asserter.start()
+    _send_all(backend, payloads[:50])
+    backend.socket.send(b"x")  # small enough to fit, but after the limit: never written
+    backend.stats = (51, 0)
+    await asserter.stop()
+    report = await asserter.stop_report()
+    assert report.packets_observed == 51
+    assert report.packets_written == 10
+    assert report.bytes_written == path.stat().st_size == 24 + 27 * 10 <= limit
+    assert report.limits_reached == ["max_stored_packets", "max_file_bytes"]
+    assert report.artifact_complete is False
+    assert report.instrument_healthy  # a declared limit, not a fault
+    assert report.window_complete is False  # but the record is not the whole window
+    assert _pcap_payloads(path) == payloads[:10]
+
+
+async def test_max_file_bytes_requires_an_output_file() -> None:
+    with pytest.raises(ValueError, match="needs an output file"):
+        PCAPAsserter("veth0", limits=CaptureLimits(max_file_bytes=1024))
+
+
+async def test_max_packets_ends_the_capture_by_itself(backend: Backend) -> None:
+    asserter = PCAPAsserter("veth0", limits=CaptureLimits(max_packets=5))
+    _send_all(backend, _payloads(8))  # queued up front: the loop closes the socket at 5
+    await asserter.start()
+    assert _wait_for(lambda: not _capture_threads(), 5)  # before stop() was called
+    backend.stats = (8, 0)  # read by the loop as it ended itself
+    packets = await asserter.stop()
+    assert [bytes(p) for p in packets] == _payloads(5)
+    report = await asserter.stop_report()
+    assert report.termination == "limit_reached"
+    assert report.limits_reached == ["max_packets"]
+    assert report.packets_observed == 5
+    assert report.instrument_healthy
+    assert report.window_complete is False
+    assert backend.socket.closed
+
+
+async def test_max_packets_also_bounds_the_stop_drain(backend: Backend) -> None:
+    gate = threading.Event()
+    backend.socket.recv_gate = gate
+    asserter = PCAPAsserter("veth0", limits=CaptureLimits(max_packets=3))
+    await asserter.start()
+    _send_all(backend, _payloads(6))
+    stopping = asyncio.ensure_future(asserter.stop_report())
+    await asyncio.sleep(0.05)  # the loop is blocked in recv() on the first packet
+    gate.set()
+    report = await stopping
+    assert report.packets_observed == 3
+    assert "max_packets" in report.limits_reached
+    assert report.window_complete is False
+
+
+async def test_max_duration_ends_the_capture_by_itself(backend: Backend) -> None:
+    asserter = PCAPAsserter("veth0", limits=CaptureLimits(max_duration=0.2))
+    await asserter.start()
+    began = time.monotonic()
+    backend.socket.send(b"early")
+    assert _wait_for(lambda: not _capture_threads(), 5)
+    assert 0.15 <= time.monotonic() - began < 2
+    backend.stats = (1, 0)
+    assert [bytes(p) for p in await asserter.stop()] == [b"early"]
+    report = await asserter.stop_report()
+    assert report.termination == "limit_reached"
+    assert report.limits_reached == ["max_duration"]
+    assert report.instrument_healthy
+    assert report.window_complete is False
+
+
+async def test_max_duration_under_continuous_traffic(backend: Backend) -> None:
+    asserter = PCAPAsserter("veth0", limits=CaptureLimits(max_duration=0.2))
+    await asserter.start()
+    running = True
+
+    def flood() -> None:
+        while running:
+            with contextlib.suppress(OSError):
+                backend.socket.send(b"busy")
+            time.sleep(0.001)
+
+    sender = threading.Thread(target=flood)
+    sender.start()
+    try:
+        assert _wait_for(lambda: not _capture_threads(), 5)
+    finally:
+        running = False
+        sender.join()
+    report = await asserter.stop_report()
+    assert report.termination == "limit_reached"
+    assert report.packets_observed > 0
+
+
+@pytest.mark.parametrize(
+    ("limits", "kept", "reached"),
+    [
+        (CaptureLimits(max_stored_packets=4), 4, "max_stored_packets"),
+        (CaptureLimits(max_stored_bytes=11 * 7 + 10), 7, "max_stored_bytes"),
+    ],
+)
+async def test_memory_limits_keep_a_prefix_and_mark_the_record_incomplete(
+    backend: Backend, limits: CaptureLimits, kept: int, reached: str
+) -> None:
+    payloads = _payloads(30)
+    asserter = PCAPAsserter("veth0", limits=limits)
+    await asserter.start()
+    _send_all(backend, payloads)
+    backend.socket.send(b"x")  # would fit the byte budget, but comes after the cut
+    backend.stats = (31, 0)
+    assert [bytes(p) for p in await asserter.stop()] == payloads[:kept]
+    report = await asserter.stop_report()
+    assert report.packets_observed == 31
+    assert report.packets_stored == kept
+    assert report.bytes_stored == 11 * kept
+    assert report.limits_reached == [reached]
+    assert report.instrument_healthy
+    assert report.window_complete is False  # in memory mode the list is the record
+
+
+async def test_disk_full_is_a_failed_capture_with_a_partial_artifact(
+    backend: Backend, tmp_path: Path
+) -> None:
+    path = tmp_path / "full.pcap"
+    real_write = sniffer._PcapFile.write
+
+    def write(self: Any, timestamp: float, raw: bytes) -> None:
+        if self.packets == 5:
+            raise OSError(errno.ENOSPC, "No space left on device")
+        real_write(self, timestamp, raw)
+
+    with patch.object(sniffer._PcapFile, "write", write):
+        asserter = PCAPAsserter("veth0", output=path)
+        await asserter.start()
+        _send_all(backend, _payloads(20))
+        backend.stats = (20, 0)
+        with pytest.raises(CaptureError) as caught:
+            await asserter.stop()
+    report = caught.value.report
+    assert report is not None
+    assert report.errors == ["PCAP write failed: OSError(28, 'No space left on device')"]
+    assert report.packets_observed == 20  # counting goes on: the counters stay meaningful
+    assert report.packets_written == 5
+    assert report.artifacts == [str(path)]  # the partial file is reported, not hidden
+    assert report.artifact_complete is False
+    assert not report.instrument_healthy
+    assert report.window_complete is False
+    assert _pcap_payloads(path) == _payloads(5)
+
+
+async def test_flush_and_close_failures_are_reported(backend: Backend, tmp_path: Path) -> None:
+    path = tmp_path / "flaky.pcap"
+
+    def refuse(self: Any) -> None:
+        raise OSError(errno.EIO, "Input/output error")
+
+    with (
+        patch.object(sniffer, "_FLUSH_IDLE", 0.02),
+        patch.object(sniffer._PcapFile, "flush", refuse),
+    ):
+        asserter = PCAPAsserter("veth0", output=path)
+        await asserter.start()
+        backend.socket.send(b"one")
+        assert _wait_for(lambda: bool(asserter._loop_thread and asserter._loop_thread.errors), 5)
+        with patch.object(sniffer._PcapFile, "close", refuse):
+            report = await asserter.stop_report()
+    assert report.errors == [
+        "PCAP flush failed: OSError(5, 'Input/output error')",
+        "PCAP close failed: OSError(5, 'Input/output error')",
+    ]
+    assert report.artifact_complete is False
+    assert not report.instrument_healthy
+
+
+async def test_an_idle_capture_flushes_the_file(backend: Backend, tmp_path: Path) -> None:
+    path = tmp_path / "live.pcap"
+    with patch.object(sniffer, "_FLUSH_IDLE", 0.02):
+        asserter = PCAPAsserter("veth0", output=path)
+        await asserter.start()
+        backend.socket.send(b"visible before stop")
+        assert _wait_for(lambda: path.stat().st_size == 24 + 16 + 19, 5)
+        await asserter.stop_report()
+
+
+async def test_limits_are_validated() -> None:
+    for bad in (
+        {"max_packets": 0},
+        {"max_duration": 0},
+        {"max_duration": float("nan")},
+        {"max_duration": float("inf")},
+        {"max_file_bytes": 23},
+        {"max_stored_packets": -1},
+        {"max_stored_bytes": -1},
+        {"max_packet": 3},
+    ):
+        with pytest.raises(ValidationError):
+            CaptureLimits(**bad)
+
+
+async def test_bounded_report_serialises(backend: Backend, tmp_path: Path) -> None:
+    asserter = PCAPAsserter(
+        "veth0", output=tmp_path / "c.pcap", limits=CaptureLimits(max_packets=10)
+    )
+    await asserter.start()
+    data = json.loads((await asserter.stop_report()).model_dump_json())
+    assert data["output_mode"] == "file"
+    assert data["limits"]["max_packets"] == 10
+    assert data["limits"]["max_stored_packets"] == 0
+    assert data["artifact_complete"] is True
+    assert data["window_complete"] is True
+
+
+async def test_a_wedged_writer_is_a_stop_timeout_not_a_complete_file(
+    backend: Backend, tmp_path: Path
+) -> None:
+    path = tmp_path / "wedged.pcap"
+    release = threading.Event()
+    real_write = sniffer._PcapFile.write
+
+    def stall(self: Any, timestamp: float, raw: bytes) -> None:
+        if self.packets == 2:
+            release.wait(10)  # e.g. a stalled network filesystem
+        real_write(self, timestamp, raw)
+
+    with patch.object(sniffer._PcapFile, "write", stall):
+        asserter = PCAPAsserter("veth0", output=path)
+        await asserter.start()
+        _send_all(backend, _payloads(5))
+        assert _wait_for(lambda: asserter._loop_thread.observed == 3, 5)  # type: ignore[union-attr]
+        report = await asserter.stop_report(timeout=0.1)
+        release.set()
+    assert report.termination == "stop_timeout"
+    assert report.packets_written == 2
+    assert report.artifacts == [str(path)]
+    assert report.artifact_complete is False
+    assert report.window_complete is False
+    with pytest.raises(CaptureError, match="stop_timeout"):
+        await asserter.stop()
