@@ -291,12 +291,7 @@ def check_cli_dependencies() -> None:
 def load_suite(path: str) -> list[dict[str, Any]]:
     """Read a suite file and return its test-case list."""
     with open(path) as handle:
-        if path.endswith(".json"):
-            import json
-
-            data = json.load(handle)
-        else:
-            data = yaml.safe_load(handle)
+        data = json.load(handle) if path.endswith(".json") else yaml.safe_load(handle)
 
     if not isinstance(data, dict):
         raise SuiteConfigError("suite file must contain a mapping with a 'tests' key")

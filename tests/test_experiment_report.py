@@ -332,7 +332,7 @@ async def test_cancellation_still_propagates_and_tears_down() -> None:
     await asyncio.sleep(0.2)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await task
+        await asyncio.wait_for(task, timeout=10)
     controller._cleanup_run.assert_called_once()
 
 
