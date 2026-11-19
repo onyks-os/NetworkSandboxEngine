@@ -6,9 +6,9 @@
 #
 annotated-types==0.8.0
     # via pydantic
-pydantic==2.14.2
+pydantic==2.14.3
     # via network-sandbox-engine (pyproject.toml)
-pydantic-core==2.50.2
+pydantic-core==2.50.4
     # via pydantic
 scapy==2.8.0
     # via network-sandbox-engine (pyproject.toml)
