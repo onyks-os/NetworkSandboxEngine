@@ -112,7 +112,7 @@ Limite da documentare: un'istanza 2.1.2 può ancora cancellare risorse 2.2.0 tra
 il proprio sweep. La nuova versione non può correggere il codice di un vecchio
 processo attivo; la prova di concorrenza riguarda istanze con il nuovo contratto.
 
-Evidenza: [risultati della fase 1](PHASE1-v2.2.0.md). Verificati 328 test su
+Evidenza: verificati 328 test su
 Python 3.10/3.12 (coverage 98,16%) e 9 integrazioni reali, inclusi traffico fra
 processi, SIGKILL e recupero prima degli alias delle veth. È stato anticipato
 l'avvio privilegiato del job CI: è un prerequisito per eseguire queste regressioni.
@@ -150,8 +150,7 @@ compatibili; guasti iniettati nei passaggi del setup non lasciano risorse non
 registrate. Il test verifica flussi IPv4/IPv6 reali durante setup e chiusura
 dell'altra run, oltre all'esistenza dei namespace.
 
-Esito: completata il 15 novembre 2026; dettagli e verifiche in
-[PHASE2-v2.2.0.md](PHASE2-v2.2.0.md).
+Esito: completata il 15 novembre 2026.
 
 ## 3. Disponibilità della cattura e rapporto diagnostico
 
@@ -179,8 +178,7 @@ arbitrari; errore all'avvio/fine distinguibile da zero pacchetti; stop entro una
 scadenza anche senza traffico; nessun thread o socket residuo nei casi coperti.
 Backend disponibile e versione minima supportata sono verificati in integrazione.
 
-Esito: completata il 16 novembre 2026; dettagli e verifiche in
-[PHASE3-v2.2.0.md](PHASE3-v2.2.0.md). Al posto di `started_callback` di
+Esito: completata il 16 novembre 2026. Al posto di `started_callback` di
 `AsyncSniffer` si usa un thread NSE su `L2ListenSocket`: la readiness è più
 forte (socket filtrato e legato) e il comportamento non dipende dalla versione
 di Scapy.
@@ -197,8 +195,7 @@ Completamento: spazi, virgolette, stringhe vuote, Unicode e metacaratteri arriva
 al processo come argomenti letterali. Output, codice d'uscita e
 `CalledProcessError` dei chiamanti esistenti restano compatibili.
 
-Esito: completata il 17 novembre 2026; dettagli e verifiche in
-[PHASE4-v2.2.0.md](PHASE4-v2.2.0.md).
+Esito: completata il 17 novembre 2026.
 
 ## 5. Catture prolungate con memoria limitata
 
@@ -218,8 +215,7 @@ Completamento: cattura lunga con memoria contenuta secondo limiti dichiarati;
 PCAP rileggibile; disco pieno, writer lento e limite raggiunto non producono un
 rapporto di cattura completa. La configurazione storica conserva tutti i pacchetti.
 
-Esito: completata il 18 novembre 2026; dettagli e verifiche in
-[PHASE5-v2.2.0.md](PHASE5-v2.2.0.md). La modalità su file si attiva con
+Esito: completata il 18 novembre 2026. La modalità su file si attiva con
 `output=` (memoria limitata a un campione, vuoto salvo dichiarazione) anziché
 con un flag `store=False` separato.
 
@@ -245,8 +241,7 @@ Completamento: processo root e processo non privilegiato con identità verificat
 timeout/cancellazione di un processo con figli; teardown e recupero dopo crash
 senza attività residue entro il confine dichiarato e senza toccare altre run.
 
-Esito: completata il 18 novembre 2026; dettagli e verifiche in
-[PHASE6-v2.2.0.md](PHASE6-v2.2.0.md). Il confine dichiarato è il namespace di
+Esito: completata il 18 novembre 2026. Il confine dichiarato è il namespace di
 rete, sempre disponibile, invece dei cgroup. Contiene anche i processi staccati
 con `setsid` e non richiede di registrare i PID per il recupero.
 
@@ -270,8 +265,7 @@ Completamento: da un artefatto CI si ricostruiscono input, ambiente, osservazion
 e limiti. Successo, regola errata, strumento guasto, timeout e cleanup incompleto
 hanno esiti distinguibili; nessuna aspettativa specifica TTP entra nel motore.
 
-Esito: completata il 18 novembre 2026; dettagli e verifiche in
-[PHASE7-v2.2.0.md](PHASE7-v2.2.0.md). La CLI usa sempre il rapporto, così un
+Esito: completata il 18 novembre 2026. La CLI usa sempre il rapporto, così un
 teardown incompleto fa fallire il caso anche senza export JSON.
 
 ## 8. Esempi e documentazione
@@ -296,8 +290,7 @@ teardown incompleto fa fallire il caso anche senza export JSON.
 Completamento: esempi eseguiti automaticamente in un ambiente pulito, con artefatti
 e fallimenti intenzionali verificati; nessuna dipendenza da TTP per usarli.
 
-Esito: completata il 18 novembre 2026; dettagli e verifiche in
-[PHASE8-v2.2.0.md](PHASE8-v2.2.0.md). La suite di TTP usa anche una funzione
+Esito: completata il 18 novembre 2026. La suite di TTP usa anche una funzione
 privata di NSE (`_get_mac_address`): la sua compatibilità va verificata in fase 9.
 
 ## 9. Qualifica e preparazione della release
@@ -322,8 +315,7 @@ Completamento: tutte le fasi hanno evidenza verificabile; pacchetti installabili
 regressioni dei consumatori superate e procedura [release](RELEASING.md) pronta.
 Tag e pubblicazione sono un'azione successiva al lavoro di pianificazione.
 
-Esito: completata il 19 novembre 2026; dettagli e verifiche in
-[PHASE9-v2.2.0.md](PHASE9-v2.2.0.md). La suite di TTP passa con 2.2.0 senza
+Esito: completata il 19 novembre 2026. La suite di TTP passa con 2.2.0 senza
 alcuna modifica. Con 2.1.2 lo `sleep(0.2)` dopo `start()` è necessario
 (senza, falliscono 2 run su 3); con 2.2.0 non serve più. L'API 2.1.2 è ora un
 contratto verificato da un test e sui pacchetti installati.

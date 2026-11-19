@@ -122,8 +122,7 @@ comunque i test di readiness, errore e memoria previsti dalle rispettive fasi.
    mentre i quattro test marcati saltano senza root. Il job deve verificare che
    i test vengano realmente eseguiti; il verde attuale da solo non lo dimostra.
    Intervento registrato nella fase 9 e anticipato nella fase 1: configurazione
-   CI corretta, esecuzione remota ancora da verificare. Vedi i
-   [risultati della fase 1](PHASE1-v2.2.0.md).
+   CI corretta, esecuzione remota ancora da verificare.
 
 Queste anomalie restano aperte e impediscono di considerare la futura release
 qualificata. La fase 0 ha stabilito una baseline misurata e una coppia di pin
