@@ -8,8 +8,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Thi
 
 ## [Unreleased]
 
-The next release is **2.2.0**: the planned public API additions belong in a
-minor release under Semantic Versioning. See `docs/PLAN-v2.2.0.md`.
+---
+
+## [2.2.0] - 2026-11-19
+
+Results you can verify: who owns each resource, whether the observer was
+ready, and whether what it recorded is complete.
+
+Code written against 2.1.x keeps working. The 2.1.2 API surface is checked by a
+test and on the installed packages. What changes is behaviour that used to fail
+silently: a prefix sweep that could delete someone else's namespace, a capture
+that could start without listening, a listener that could fail to bind
+unnoticed. Each now fails explicitly or is replaced by a guarantee. See
+[Upgrading to 2.2](https://onyks-os.github.io/nse/release-notes/upgrading-to-2.2/) for what to
+check and what you can remove. Qualified against TransparentTorProxy's
+zero-leak suite and the independent NAT gateway example.
 
 ### Fixed
 
@@ -171,6 +184,22 @@ minor release under Semantic Versioning. See `docs/PLAN-v2.2.0.md`.
 
 ### Maintenance
 
+- **The 2.1.2 API is a tested contract.** `scripts/api_surface.py` reads the
+  public surface from source (modules, names, methods, attributes, parameter
+  order, kinds and defaults, sync or async, return annotations), and
+  `tests/test_api_compat.py` compares the checkout with the record of the v2.1.2
+  tag in `tests/data/api-2.1.2.json`. The checker's own tests prove it reports
+  each kind of break. `_get_mac_address`, private but used by
+  TransparentTorProxy, is covered as if public.
+- **CI installs the packages it would publish.** The `smoke-pypi` job used an
+  editable install, which imports from the checkout. It now builds the wheel and
+  sdist and installs each in a clean virtualenv outside the checkout, on Python
+  3.10 to 3.13 (`scripts/check-dist.sh`, also `make dist-check` and part of
+  `make release-dry`). It runs the core alone, then the `[cli]` extra, with
+  `pip check`, the 2.1.2 API check against the installed files, the runner's
+  message when PyYAML is missing, and every example suite. ruff and mypy now
+  check `scripts/`.
+- Python 3.13, already tested in CI, is declared in the classifiers.
 - The privileged CI jobs run in a dedicated, empty network namespace
   (`scripts/isolated-netns.sh`). Some runner hosts route part of NSE's default
   subnet, which NSE correctly refuses to shadow.
@@ -187,6 +216,9 @@ minor release under Semantic Versioning. See `docs/PLAN-v2.2.0.md`.
 
 ### Documentation
 
+- **Upgrading to 2.2** lists the behaviour changes a 2.1.x caller may notice,
+  the code that can be removed, and what can now be asserted. It includes a
+  measured comparison of the capture readiness race in 2.1.2 and 2.2.0.
 - The generic "Zero Host Mutation" claim is replaced by the exact guarantee.
   The ruleset under test, forwarding and DAD settings stay inside the
   namespaces, and the host firewall is never touched. A run does create, and

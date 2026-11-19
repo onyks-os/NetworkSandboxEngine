@@ -1,6 +1,6 @@
 # NSE v2.2.0 — piano di lavoro
 
-Stato: fasi 0–8 completate; prossima fase 9. Aggiornato: 18 novembre 2026.
+Stato: fasi 0–9 completate; restano tag e pubblicazione. Aggiornato: 19 novembre 2026.
 
 Obiettivo: rendere verificabili proprietà delle risorse, disponibilità degli
 osservatori e completezza dei risultati, mantenendo il motore piccolo e le API
@@ -304,23 +304,29 @@ privata di NSE (`_get_mac_address`): la sua compatibilità va verificata in fase
 
 - [x] Configurare il job di integrazione con privilegi reali e controllo dell'UID,
   anticipato nella fase 1 per eseguire le nuove regressioni invece di saltarle.
-- [ ] Eseguire lint, tipi, import boundaries, coverage senza abbassare la soglia
+- [x] Eseguire lint, tipi, import boundaries, coverage senza abbassare la soglia
   del 98%, documentazione e build dei pacchetti.
-- [ ] Eseguire davvero test privilegiati e blindness su entrambi gli ambienti
+- [x] Eseguire davvero test privilegiati e blindness su entrambi gli ambienti
   Linux della CI. Non accettare un job verde composto da test saltati: verificare
   privilegi/prerequisiti ed esecuzione dei nuovi test di concorrenza e crash.
-- [ ] Provare wheel e sdist in virtualenv puliti fuori dal checkout: core, extra
+- [x] Provare wheel e sdist in virtualenv puliti fuori dal checkout: core, extra
   CLI, `pip check`, import, esempi e API storiche, anche su Python 3.10/3.11.
-- [ ] Ripetere le regressioni concorrenti con barriere di sincronizzazione e
+- [x] Ripetere le regressioni concorrenti con barriere di sincronizzazione e
   guasti controllati; salvare evidenza dei flussi e delle risorse prima/dopo.
-- [ ] Eseguire la qualifica TTP e del caso indipendente; annotare le versioni
+- [x] Eseguire la qualifica TTP e del caso indipendente; annotare le versioni
   effettivamente provate senza trasformare il vincolo Python di TTP in quello NSE.
-- [ ] Aggiornare versione e changelog solo a implementazione qualificata, quindi
+- [x] Aggiornare versione e changelog solo a implementazione qualificata, quindi
   eseguire `make release-dry` e preparare note/articoli di compatibilità.
 
 Completamento: tutte le fasi hanno evidenza verificabile; pacchetti installabili,
 regressioni dei consumatori superate e procedura [release](RELEASING.md) pronta.
 Tag e pubblicazione sono un'azione successiva al lavoro di pianificazione.
+
+Esito: completata il 19 novembre 2026; dettagli e verifiche in
+[PHASE9-v2.2.0.md](PHASE9-v2.2.0.md). La suite di TTP passa con 2.2.0 senza
+alcuna modifica. Con 2.1.2 lo `sleep(0.2)` dopo `start()` è necessario
+(senza, falliscono 2 run su 3); con 2.2.0 non serve più. L'API 2.1.2 è ora un
+contratto verificato da un test e sui pacchetti installati.
 
 ## Compatibilità e decisioni da rendere visibili
 

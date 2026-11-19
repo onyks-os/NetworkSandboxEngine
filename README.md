@@ -192,6 +192,11 @@ Install the core engine with CLI support:
 pip install "network-sandbox-engine[cli]"
 ```
 
+Upgrading from 2.1.x needs no code change: the 2.1.2 API is checked by a test
+and on the installed packages. Some silent failures are now errors, and some
+workarounds are no longer needed. See
+[Upgrading to 2.2](https://onyks-os.github.io/nse/release-notes/upgrading-to-2.2/).
+
 ### 2. Manual Source Install
 
 For local development:

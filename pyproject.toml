@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "network-sandbox-engine"
-version = "2.1.2"
+version = "2.2.0"
 description = "Headless Python engine for isolated network namespace testing and PCAP assertions."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -24,6 +24,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: System :: Networking",
     "Topic :: Software Development :: Testing",
 ]

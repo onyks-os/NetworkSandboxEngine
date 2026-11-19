@@ -204,9 +204,16 @@ jobs:
     - name: Assert a blind parser fails the run
       run: sudo -E bash scripts/isolated-netns.sh make test-blind
 
+  # An editable install imports from the checkout, so it cannot show what the
+  # wheel and sdist contain. These are the artifacts a consumer installs, each
+  # in a clean virtualenv outside the checkout, on every supported Python.
   smoke-pypi:
-    name: Package installs and imports
+    name: Packages install and keep the 2.1.2 API (${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.11', '3.12', '3.13']
     steps:
     - name: Checkout Repository
       uses: actions/checkout@v7
@@ -214,12 +221,12 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v7
       with:
-        python-version: '3.11'
+        python-version: ${{ matrix.python-version }}
 
-    - name: Test Editable Install & Imports
+    - name: Build the wheel and sdist
       run: |
-        python -m venv .smoke_venv
-        source .smoke_venv/bin/activate
-        pip install -e ".[cli]"
-        python -c "import nse; from nse.core.pipeline import run_test_pipeline; print('Smoke PyPI OK')"
-        nse-runner --help
+        python -m pip install build
+        python -m build --outdir "$RUNNER_TEMP/dist"
+
+    - name: Install and exercise them outside the checkout
+      run: bash scripts/check-dist.sh python "$RUNNER_TEMP/dist"

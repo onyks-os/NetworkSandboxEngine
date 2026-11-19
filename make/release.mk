@@ -5,13 +5,17 @@
 # v* tag is pushed; these targets exist to rehearse and verify it locally.
 # ---------------------------------------------------------------------------
 
-.PHONY: build sbom checksums sign release-notes release-check release-dry
+.PHONY: build dist-check sbom checksums sign release-notes release-check release-dry
 
 DIST_DIR ?= dist
 
 ##@ Release
 
 build: lang-build ## Build the distributable artifacts into dist/
+
+dist-check: ## Install dist/ wheel and sdist in clean venvs; check imports, extras, 2.1.2 API
+	@echo "==> [$(PROJECT_SHORT)] Checking the built distributions outside the checkout..."
+	@bash scripts/check-dist.sh $(PYTHON) $(DIST_DIR)
 
 sbom: ## Generate a CycloneDX SBOM for the built artifacts
 	@echo "==> [$(PROJECT_SHORT)] Generating SBOM..."
@@ -61,7 +65,7 @@ release-check: ## Verify the repository is ready to be tagged
 		|| { echo "!!! README.md or SECURITY.md still contains template placeholders."; exit 1; }
 	@echo "==> Ready to tag: git tag -s v$(VERSION) -m \"$(PROJECT_SHORT) v$(VERSION)\""
 
-release-dry: release-check verify build sbom checksums ## Full local release rehearsal
+release-dry: release-check verify build dist-check sbom checksums ## Full local release rehearsal
 	@echo "======================================================================"
 	@echo "[$(PROJECT_SHORT)] Release rehearsal complete. Artifacts in $(DIST_DIR)/:"
 	@ls -la $(DIST_DIR)/

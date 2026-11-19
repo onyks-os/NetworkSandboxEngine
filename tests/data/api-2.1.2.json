@@ -1,0 +1,1548 @@
+{
+ "nse": {
+  "NetnsController": {
+   "kind": "reexport",
+   "target": "nse.core.netns_controller.NetnsController"
+  },
+  "PCAPAsserter": {
+   "kind": "reexport",
+   "target": "nse.core.sniffer.PCAPAsserter"
+  },
+  "__package__": {
+   "kind": "meta",
+   "package": true
+  }
+ },
+ "nse.cli": {
+  "__package__": {
+   "kind": "meta",
+   "package": true
+  }
+ },
+ "nse.cli.runner": {
+  "CaseOutcome": {
+   "attributes": [
+    "lines",
+    "name",
+    "oracle_error",
+    "passed"
+   ],
+   "bases": [],
+   "kind": "class",
+   "methods": {}
+  },
+  "NetnsController": {
+   "kind": "reexport",
+   "target": "nse.core.netns_controller.NetnsController"
+  },
+  "PacketSpec": {
+   "kind": "reexport",
+   "target": "nse.models.test_request.PacketSpec"
+  },
+  "SuiteConfigError": {
+   "attributes": [],
+   "bases": [
+    "Exception"
+   ],
+   "kind": "class",
+   "methods": {}
+  },
+  "SuiteOutcome": {
+   "attributes": [
+    "exit_code",
+    "failed",
+    "oracle_errors",
+    "passed"
+   ],
+   "bases": [],
+   "kind": "class",
+   "methods": {
+    "record": {
+     "async": false,
+     "kind": "function",
+     "params": [
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "self"
+      },
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "outcome"
+      }
+     ],
+     "returns": "None"
+    }
+   }
+  },
+  "TestRequest": {
+   "kind": "reexport",
+   "target": "nse.models.test_request.TestRequest"
+  },
+  "TopologyType": {
+   "kind": "reexport",
+   "target": "nse.models.test_request.TopologyType"
+  },
+  "TraceEvent": {
+   "kind": "reexport",
+   "target": "nse.models.trace_event.TraceEvent"
+  },
+  "__package__": {
+   "kind": "meta",
+   "package": false
+  },
+  "build_case": {
+   "async": false,
+   "kind": "function",
+   "params": [
+    {
+     "default": false,
+     "kind": "positional",
+     "name": "raw"
+    },
+    {
+     "default": false,
+     "kind": "positional",
+     "name": "index"
+    }
+   ],
+   "returns": "tuple[str, TestRequest, list[str]]"
+  },
+  "check_cli_dependencies": {
+   "async": false,
+   "kind": "function",
+   "params": [],
+   "returns": "None"
+  },
+  "collect_oracle_errors": {
+   "async": false,
+   "kind": "function",
+   "params": [
+    {
+     "default": false,
+     "kind": "positional",
+     "name": "events"
+    }
+   ],
+   "returns": "list[str]"
+  },
+  "evaluate_case": {
+   "async": false,
+   "kind": "function",
+   "params": [
+    {
+     "default": false,
+     "kind": "positional",
+     "name": "name"
+    },
+    {
+     "default": false,
+     "kind": "positional",
+     "name": "expected"
+    },
+    {
+     "default": false,
+     "kind": "positional",
+     "name": "events"
+    }
+   ],
+   "returns": "CaseOutcome"
+  },
+  "load_suite": {
+   "async": false,
+   "kind": "function",
+   "params": [
+    {
+     "default": false,
+     "kind": "positional",
+     "name": "path"
+    }
+   ],
+   "returns": "list[dict[str, Any]]"
+  },
+  "main": {
+   "async": false,
+   "kind": "function",
+   "params": [],
+   "returns": "None"
+  },
+  "reduce_verdicts": {
+   "async": false,
+   "kind": "function",
+   "params": [
+    {
+     "default": false,
+     "kind": "positional",
+     "name": "events"
+    }
+   ],
+   "returns": "list[str]"
+  },
+  "run_suite": {
+   "async": false,
+   "kind": "function",
+   "params": [
+    {
+     "default": false,
+     "kind": "positional",
+     "name": "cases"
+    },
+    {
+     "default": false,
+     "kind": "positional",
+     "name": "controller"
+    }
+   ],
+   "returns": "SuiteOutcome"
+  },
+  "run_test_pipeline": {
+   "kind": "reexport",
+   "target": "nse.core.pipeline.run_test_pipeline"
+  }
+ },
+ "nse.core": {
+  "__package__": {
+   "kind": "meta",
+   "package": true
+  }
+ },
+ "nse.core.mock_listener": {
+  "__package__": {
+   "kind": "meta",
+   "package": false
+  },
+  "logger": {
+   "kind": "value"
+  },
+  "main": {
+   "async": false,
+   "kind": "function",
+   "params": [
+    {
+     "default": true,
+     "kind": "positional",
+     "name": "argv"
+    }
+   ],
+   "returns": "None"
+  },
+  "resolve": {
+   "kind": "reexport",
+   "target": "nse.core.paths.resolve"
+  },
+  "run_tcp_server": {
+   "async": false,
+   "kind": "function",
+   "params": [
+    {
+     "default": false,
+     "kind": "positional",
+     "name": "host"
+    },
+    {
+     "default": false,
+     "kind": "positional",
+     "name": "port"
+    }
+   ],
+   "returns": "None"
+  },
+  "run_udp_server": {
+   "async": false,
+   "kind": "function",
+   "params": [
+    {
+     "default": false,
+     "kind": "positional",
+     "name": "host"
+    },
+    {
+     "default": false,
+     "kind": "positional",
+     "name": "port"
+    }
+   ],
+   "returns": "None"
+  },
+  "start_mock_listener": {
+   "async": false,
+   "kind": "function",
+   "params": [
+    {
+     "default": false,
+     "kind": "positional",
+     "name": "netns_name"
+    },
+    {
+     "default": false,
+     "kind": "positional",
+     "name": "proto"
+    },
+    {
+     "default": false,
+     "kind": "positional",
+     "name": "port"
+    },
+    {
+     "default": true,
+     "kind": "positional",
+     "name": "host"
+    },
+    {
+     "default": true,
+     "kind": "positional",
+     "name": "use_nsenter"
+    }
+   ],
+   "returns": "subprocess.Popen[str]"
+  }
+ },
+ "nse.core.naming": {
+  "NETNS_SWEEP_PREFIXES": {
+   "kind": "value"
+  },
+  "NamespaceNames": {
+   "attributes": [
+    "netns",
+    "router_ns",
+    "server_ns",
+    "test_id",
+    "veth_host",
+    "veth_router_host",
+    "veth_router_server",
+    "veth_server"
+   ],
+   "bases": [],
+   "kind": "class",
+   "methods": {}
+  },
+  "VETH_SWEEP_PREFIXES": {
+   "kind": "value"
+  },
+  "__package__": {
+   "kind": "meta",
+   "package": false
+  },
+  "derive_names": {
+   "async": false,
+   "kind": "function",
+   "params": [
+    {
+     "default": false,
+     "kind": "positional",
+     "name": "test_id"
+    }
+   ],
+   "returns": "NamespaceNames"
+  }
+ },
+ "nse.core.netns_controller": {
+  "NETNS_SWEEP_PREFIXES": {
+   "kind": "reexport",
+   "target": "nse.core.naming.NETNS_SWEEP_PREFIXES"
+  },
+  "NamespaceSandbox": {
+   "attributes": [
+    "controller",
+    "ext_iface",
+    "name",
+    "peer_iface"
+   ],
+   "bases": [],
+   "kind": "class",
+   "methods": {
+    "__init__": {
+     "async": false,
+     "kind": "function",
+     "params": [
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "self"
+      },
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "controller"
+      },
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "name"
+      }
+     ],
+     "returns": "None"
+    },
+    "exec": {
+     "async": true,
+     "kind": "function",
+     "params": [
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "self"
+      },
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "command"
+      }
+     ],
+     "returns": "subprocess.CompletedProcess[bytes]"
+    },
+    "inject_packet": {
+     "async": true,
+     "kind": "function",
+     "params": [
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "self"
+      },
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "protocol"
+      },
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "dst_port"
+      },
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "dst_ip"
+      },
+      {
+       "default": true,
+       "kind": "positional",
+       "name": "src_ip"
+      }
+     ],
+     "returns": "None"
+    }
+   }
+  },
+  "NetnsController": {
+   "attributes": [
+    "use_nsenter"
+   ],
+   "bases": [],
+   "kind": "class",
+   "methods": {
+    "__init__": {
+     "async": false,
+     "kind": "function",
+     "params": [
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "self"
+      },
+      {
+       "default": true,
+       "kind": "positional",
+       "name": "use_nsenter"
+      }
+     ],
+     "returns": "None"
+    },
+    "cleanup_all": {
+     "async": false,
+     "kind": "function",
+     "params": [
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "self"
+      }
+     ],
+     "returns": "None"
+    },
+    "create_gateway_topology": {
+     "async": false,
+     "kind": "function",
+     "params": [
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "self"
+      },
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "router_ns"
+      },
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "server_ns"
+      },
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "veth_host"
+      },
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "veth_router_host"
+      },
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "veth_router_server"
+      },
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "veth_server"
+      },
+      {
+       "default": true,
+       "kind": "positional",
+       "name": "host_v4"
+      },
+      {
+       "default": true,
+       "kind": "positional",
+       "name": "router_host_v4"
+      },
+      {
+       "default": true,
+       "kind": "positional",
+       "name": "router_server_v4"
+      },
+      {
+       "default": true,
+       "kind": "positional",
+       "name": "server_v4"
+      },
+      {
+       "default": true,
+       "kind": "positional",
+       "name": "host_v6"
+      },
+      {
+       "default": true,
+       "kind": "positional",
+       "name": "router_host_v6"
+      },
+      {
+       "default": true,
+       "kind": "positional",
+       "name": "router_server_v6"
+      },
+      {
+       "default": true,
+       "kind": "positional",
+       "name": "server_v6"
+      }
+     ],
+     "returns": "None"
+    },
+    "create_namespace": {
+     "async": true,
+     "kind": "function",
+     "params": [
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "self"
+      },
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "name"
+      },
+      {
+       "default": true,
+       "kind": "positional",
+       "name": "host_ip"
+      },
+      {
+       "default": true,
+       "kind": "positional",
+       "name": "peer_ip"
+      }
+     ],
+     "returns": "AsyncIterator[NamespaceSandbox]"
+    },
+    "create_netns": {
+     "async": false,
+     "kind": "function",
+     "params": [
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "self"
+      },
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "name"
+      }
+     ],
+     "returns": "None"
+    },
+    "create_veth_pair": {
+     "async": false,
+     "kind": "function",
+     "params": [
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "self"
+      },
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "netns_name"
+      },
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "veth_host"
+      },
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "veth_peer"
+      },
+      {
+       "default": true,
+       "kind": "positional",
+       "name": "host_ip"
+      },
+      {
+       "default": true,
+       "kind": "positional",
+       "name": "peer_ip"
+      }
+     ],
+     "returns": "None"
+    },
+    "destroy_netns": {
+     "async": false,
+     "kind": "function",
+     "params": [
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "self"
+      },
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "name"
+      }
+     ],
+     "returns": "None"
+    },
+    "exec_prefix": {
+     "async": false,
+     "kind": "function",
+     "params": [
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "self"
+      },
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "name"
+      }
+     ],
+     "returns": "list[str]"
+    },
+    "startup_sweep": {
+     "async": false,
+     "kind": "function",
+     "params": [
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "self"
+      }
+     ],
+     "returns": "None"
+    }
+   }
+  },
+  "TestRun": {
+   "attributes": [
+    "event_queue",
+    "netns_name",
+    "request",
+    "status",
+    "test_id"
+   ],
+   "bases": [],
+   "kind": "class",
+   "methods": {}
+  },
+  "VETH_SWEEP_PREFIXES": {
+   "kind": "reexport",
+   "target": "nse.core.naming.VETH_SWEEP_PREFIXES"
+  },
+  "__package__": {
+   "kind": "meta",
+   "package": false
+  },
+  "is_in_container": {
+   "kind": "reexport",
+   "target": "nse.core.utils.is_in_container"
+  },
+  "logger": {
+   "kind": "value"
+  },
+  "resolve": {
+   "kind": "reexport",
+   "target": "nse.core.paths.resolve"
+  }
+ },
+ "nse.core.paths": {
+  "BinaryNotFoundError": {
+   "attributes": [],
+   "bases": [
+    "FileNotFoundError"
+   ],
+   "kind": "class",
+   "methods": {}
+  },
+  "TRUSTED_DIRS": {
+   "kind": "value"
+  },
+  "UnsafeBinaryError": {
+   "attributes": [],
+   "bases": [
+    "Exception"
+   ],
+   "kind": "class",
+   "methods": {}
+  },
+  "__package__": {
+   "kind": "meta",
+   "package": false
+  },
+  "clear_cache": {
+   "async": false,
+   "kind": "function",
+   "params": [],
+   "returns": "None"
+  },
+  "resolve": {
+   "async": false,
+   "kind": "function",
+   "params": [
+    {
+     "default": false,
+     "kind": "positional",
+     "name": "binary"
+    }
+   ],
+   "returns": "str"
+  },
+  "resolve_optional": {
+   "async": false,
+   "kind": "function",
+   "params": [
+    {
+     "default": false,
+     "kind": "positional",
+     "name": "binary"
+    }
+   ],
+   "returns": "str | None"
+  }
+ },
+ "nse.core.pipeline": {
+  "NetnsController": {
+   "kind": "reexport",
+   "target": "nse.core.netns_controller.NetnsController"
+  },
+  "PacketSpec": {
+   "kind": "reexport",
+   "target": "nse.models.test_request.PacketSpec"
+  },
+  "RuleEngine": {
+   "kind": "reexport",
+   "target": "nse.core.rule_engine.RuleEngine"
+  },
+  "RuleValidationError": {
+   "kind": "reexport",
+   "target": "nse.core.rule_engine.RuleValidationError"
+  },
+  "ScapyInjector": {
+   "kind": "reexport",
+   "target": "nse.core.scapy_injector.ScapyInjector"
+  },
+  "TestRequest": {
+   "kind": "reexport",
+   "target": "nse.models.test_request.TestRequest"
+  },
+  "TestRun": {
+   "kind": "reexport",
+   "target": "nse.core.netns_controller.TestRun"
+  },
+  "TopologyType": {
+   "kind": "reexport",
+   "target": "nse.models.test_request.TopologyType"
+  },
+  "TraceEvent": {
+   "kind": "reexport",
+   "target": "nse.models.trace_event.TraceEvent"
+  },
+  "TraceHarvester": {
+   "kind": "reexport",
+   "target": "nse.core.trace_harvester.TraceHarvester"
+  },
+  "__package__": {
+   "kind": "meta",
+   "package": false
+  },
+  "derive_names": {
+   "kind": "reexport",
+   "target": "nse.core.naming.derive_names"
+  },
+  "logger": {
+   "kind": "value"
+  },
+  "parse_conntrack_line": {
+   "async": false,
+   "kind": "function",
+   "params": [
+    {
+     "default": false,
+     "kind": "positional",
+     "name": "line"
+    }
+   ],
+   "returns": "dict[str, Any] | None"
+  },
+  "read_conntrack_table": {
+   "async": false,
+   "kind": "function",
+   "params": [
+    {
+     "default": false,
+     "kind": "positional",
+     "name": "netns"
+    },
+    {
+     "default": true,
+     "kind": "positional",
+     "name": "use_nsenter"
+    }
+   ],
+   "returns": "list[dict[str, Any]]"
+  },
+  "resolve": {
+   "kind": "reexport",
+   "target": "nse.core.paths.resolve"
+  },
+  "run_test_pipeline": {
+   "async": true,
+   "kind": "function",
+   "params": [
+    {
+     "default": false,
+     "kind": "positional",
+     "name": "request"
+    },
+    {
+     "default": true,
+     "kind": "positional",
+     "name": "controller"
+    },
+    {
+     "default": true,
+     "kind": "positional",
+     "name": "queue"
+    },
+    {
+     "default": true,
+     "kind": "positional",
+     "name": "run"
+    }
+   ],
+   "returns": "list[TraceEvent]"
+  },
+  "start_mock_listener": {
+   "kind": "reexport",
+   "target": "nse.core.mock_listener.start_mock_listener"
+  }
+ },
+ "nse.core.rule_engine": {
+  "NftError": {
+   "attributes": [
+    "column_range",
+    "level",
+    "line",
+    "message"
+   ],
+   "bases": [],
+   "kind": "class",
+   "methods": {}
+  },
+  "RuleEngine": {
+   "attributes": [
+    "use_nsenter"
+   ],
+   "bases": [],
+   "kind": "class",
+   "methods": {
+    "__init__": {
+     "async": false,
+     "kind": "function",
+     "params": [
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "self"
+      },
+      {
+       "default": true,
+       "kind": "positional",
+       "name": "use_nsenter"
+      }
+     ],
+     "returns": "None"
+    },
+    "exec_prefix": {
+     "async": false,
+     "kind": "function",
+     "params": [
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "self"
+      },
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "name"
+      }
+     ],
+     "returns": "list[str]"
+    },
+    "flush": {
+     "async": false,
+     "kind": "function",
+     "params": [
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "self"
+      },
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "netns_name"
+      }
+     ],
+     "returns": "None"
+    },
+    "load": {
+     "async": false,
+     "kind": "function",
+     "params": [
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "self"
+      },
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "rules"
+      },
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "netns_name"
+      }
+     ],
+     "returns": "None"
+    },
+    "validate": {
+     "async": false,
+     "kind": "function",
+     "params": [
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "self"
+      },
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "rules"
+      }
+     ],
+     "returns": "None"
+    }
+   }
+  },
+  "RuleValidationError": {
+   "attributes": [
+    "errors"
+   ],
+   "bases": [
+    "Exception"
+   ],
+   "kind": "class",
+   "methods": {
+    "__init__": {
+     "async": false,
+     "kind": "function",
+     "params": [
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "self"
+      },
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "errors"
+      }
+     ],
+     "returns": "None"
+    }
+   }
+  },
+  "__package__": {
+   "kind": "meta",
+   "package": false
+  },
+  "logger": {
+   "kind": "value"
+  },
+  "resolve": {
+   "kind": "reexport",
+   "target": "nse.core.paths.resolve"
+  }
+ },
+ "nse.core.scapy_injector": {
+  "ScapyInjector": {
+   "attributes": [
+    "use_nsenter"
+   ],
+   "bases": [],
+   "kind": "class",
+   "methods": {
+    "__init__": {
+     "async": false,
+     "kind": "function",
+     "params": [
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "self"
+      },
+      {
+       "default": true,
+       "kind": "positional",
+       "name": "use_nsenter"
+      }
+     ],
+     "returns": "None"
+    },
+    "inject": {
+     "async": false,
+     "kind": "function",
+     "params": [
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "self"
+      },
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "spec"
+      },
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "netns_name"
+      },
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "veth_host"
+      },
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "veth_peer"
+      },
+      {
+       "default": true,
+       "kind": "positional",
+       "name": "host_netns"
+      }
+     ],
+     "returns": "None"
+    }
+   }
+  },
+  "__package__": {
+   "kind": "meta",
+   "package": false
+  },
+  "_get_mac_address": {
+   "async": false,
+   "kind": "function",
+   "params": [
+    {
+     "default": false,
+     "kind": "positional",
+     "name": "interface"
+    },
+    {
+     "default": true,
+     "kind": "positional",
+     "name": "netns_name"
+    },
+    {
+     "default": true,
+     "kind": "positional",
+     "name": "use_nsenter"
+    }
+   ],
+   "returns": "str"
+  },
+  "logger": {
+   "kind": "value"
+  },
+  "resolve": {
+   "kind": "reexport",
+   "target": "nse.core.paths.resolve"
+  }
+ },
+ "nse.core.sniffer": {
+  "DEFAULT_FILTER": {
+   "kind": "value"
+  },
+  "ND_TYPE_MAX": {
+   "kind": "value"
+  },
+  "ND_TYPE_MIN": {
+   "kind": "value"
+  },
+  "PCAPAsserter": {
+   "attributes": [
+    "filter",
+    "iface"
+   ],
+   "bases": [],
+   "kind": "class",
+   "methods": {
+    "__init__": {
+     "async": false,
+     "kind": "function",
+     "params": [
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "self"
+      },
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "iface"
+      },
+      {
+       "default": true,
+       "kind": "positional",
+       "name": "filter"
+      },
+      {
+       "default": true,
+       "kind": "keyword",
+       "name": "replace_default_filter"
+      }
+     ],
+     "returns": "None"
+    },
+    "start": {
+     "async": true,
+     "kind": "function",
+     "params": [
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "self"
+      }
+     ],
+     "returns": "None"
+    },
+    "stop": {
+     "async": true,
+     "kind": "function",
+     "params": [
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "self"
+      }
+     ],
+     "returns": "list[Packet]"
+    }
+   }
+  },
+  "__package__": {
+   "kind": "meta",
+   "package": false
+  },
+  "logger": {
+   "kind": "value"
+  }
+ },
+ "nse.core.trace_harvester": {
+  "HarvestState": {
+   "attributes": [
+    "CLEAN_EOF",
+    "ERROR",
+    "NOT_STARTED",
+    "RUNNING",
+    "STOPPED",
+    "TIMEOUT",
+    "is_healthy"
+   ],
+   "bases": [
+    "str",
+    "enum.Enum"
+   ],
+   "kind": "class",
+   "methods": {}
+  },
+  "TraceHarvester": {
+   "attributes": [
+    "error",
+    "seen_trace_ids",
+    "state",
+    "unparsed_other_lines",
+    "unparsed_samples",
+    "unparsed_trace_lines"
+   ],
+   "bases": [],
+   "kind": "class",
+   "methods": {
+    "__init__": {
+     "async": false,
+     "kind": "function",
+     "params": [
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "self"
+      }
+     ],
+     "returns": "None"
+    },
+    "aclose": {
+     "async": true,
+     "kind": "function",
+     "params": [
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "self"
+      },
+      {
+       "default": true,
+       "kind": "positional",
+       "name": "timeout"
+      }
+     ],
+     "returns": "HarvestState"
+    },
+    "arm_event_signal": {
+     "async": false,
+     "kind": "function",
+     "params": [
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "self"
+      }
+     ],
+     "returns": "None"
+    },
+    "extend_deadline": {
+     "async": false,
+     "kind": "function",
+     "params": [
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "self"
+      },
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "seconds"
+      }
+     ],
+     "returns": "None"
+    },
+    "health_errors": {
+     "async": false,
+     "kind": "function",
+     "params": [
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "self"
+      }
+     ],
+     "returns": "list[str]"
+    },
+    "start": {
+     "async": true,
+     "kind": "function",
+     "params": [
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "self"
+      },
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "netns_name"
+      },
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "queue"
+      },
+      {
+       "default": true,
+       "kind": "positional",
+       "name": "timeout"
+      },
+      {
+       "default": true,
+       "kind": "positional",
+       "name": "use_nsenter"
+      },
+      {
+       "default": true,
+       "kind": "positional",
+       "name": "on_event"
+      }
+     ],
+     "returns": "None"
+    },
+    "stop": {
+     "async": false,
+     "kind": "function",
+     "params": [
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "self"
+      }
+     ],
+     "returns": "None"
+    },
+    "wait_for_event": {
+     "async": true,
+     "kind": "function",
+     "params": [
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "self"
+      },
+      {
+       "default": true,
+       "kind": "positional",
+       "name": "timeout"
+      }
+     ],
+     "returns": "bool"
+    },
+    "wait_ready": {
+     "async": true,
+     "kind": "function",
+     "params": [
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "self"
+      },
+      {
+       "default": true,
+       "kind": "positional",
+       "name": "timeout"
+      }
+     ],
+     "returns": "bool"
+    }
+   }
+  },
+  "__package__": {
+   "kind": "meta",
+   "package": false
+  },
+  "logger": {
+   "kind": "value"
+  },
+  "resolve": {
+   "kind": "reexport",
+   "target": "nse.core.paths.resolve"
+  }
+ },
+ "nse.core.utils": {
+  "__package__": {
+   "kind": "meta",
+   "package": false
+  },
+  "is_in_container": {
+   "async": false,
+   "kind": "function",
+   "params": [],
+   "returns": "bool"
+  }
+ },
+ "nse.models": {
+  "__package__": {
+   "kind": "meta",
+   "package": true
+  }
+ },
+ "nse.models.test_request": {
+  "PacketSpec": {
+   "attributes": [
+    "dst_ip",
+    "dst_port",
+    "protocol",
+    "src_ip",
+    "src_port",
+    "tcp_flags"
+   ],
+   "bases": [
+    "BaseModel"
+   ],
+   "kind": "class",
+   "methods": {
+    "validate_ip": {
+     "async": false,
+     "kind": "function",
+     "params": [
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "cls"
+      },
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "v"
+      }
+     ],
+     "returns": "str"
+    },
+    "validate_tcp_flags": {
+     "async": false,
+     "kind": "function",
+     "params": [
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "cls"
+      },
+      {
+       "default": false,
+       "kind": "positional",
+       "name": "flags"
+      }
+     ],
+     "returns": "list[str]"
+    }
+   }
+  },
+  "TestRequest": {
+   "attributes": [
+    "packets",
+    "rules",
+    "topology"
+   ],
+   "bases": [
+    "BaseModel"
+   ],
+   "kind": "class",
+   "methods": {}
+  },
+  "TopologyType": {
+   "attributes": [
+    "GATEWAY",
+    "SIMPLE"
+   ],
+   "bases": [
+    "str",
+    "Enum"
+   ],
+   "kind": "class",
+   "methods": {}
+  },
+  "__package__": {
+   "kind": "meta",
+   "package": false
+  }
+ },
+ "nse.models.trace_event": {
+  "TestStatus": {
+   "kind": "value"
+  },
+  "TestStatusResponse": {
+   "attributes": [
+    "status",
+    "test_id"
+   ],
+   "bases": [
+    "BaseModel"
+   ],
+   "kind": "class",
+   "methods": {}
+  },
+  "TraceEvent": {
+   "attributes": [
+    "chain",
+    "ct_dport",
+    "ct_dst",
+    "ct_proto",
+    "ct_sport",
+    "ct_src",
+    "ct_state",
+    "family",
+    "hook",
+    "raw_message",
+    "rule_handle",
+    "rule_text",
+    "table",
+    "timestamp",
+    "trace_id",
+    "type",
+    "verdict"
+   ],
+   "bases": [
+    "BaseModel"
+   ],
+   "kind": "class",
+   "methods": {}
+  },
+  "__package__": {
+   "kind": "meta",
+   "package": false
+  }
+ }
+}
