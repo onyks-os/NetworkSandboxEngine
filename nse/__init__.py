@@ -7,7 +7,11 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _version
 
 from .core.netns_controller import NetnsController
-from .core.sniffer import PCAPAsserter
+from .core.process import IdentityError, ManagedProcess, ProcessExitedError, ProcessStartError
+from .core.sniffer import CaptureError, CaptureStartError, CaptureStateError, PCAPAsserter
+from .models.capture_report import CaptureLimits, CaptureReport
+from .models.experiment_report import ExperimentReport, PositiveControl
+from .models.process import EffectiveIdentity, ProcessIdentity, ProcessResult
 
 try:
     # Read the version from installed metadata rather than restating it here.
@@ -17,4 +21,22 @@ try:
 except PackageNotFoundError:  # pragma: no cover - running from a bare checkout
     __version__ = "0.0.0.dev0"
 
-__all__ = ["NetnsController", "PCAPAsserter", "__version__"]
+__all__ = [
+    "CaptureError",
+    "CaptureLimits",
+    "CaptureReport",
+    "CaptureStartError",
+    "CaptureStateError",
+    "EffectiveIdentity",
+    "ExperimentReport",
+    "IdentityError",
+    "ManagedProcess",
+    "NetnsController",
+    "PCAPAsserter",
+    "PositiveControl",
+    "ProcessExitedError",
+    "ProcessIdentity",
+    "ProcessResult",
+    "ProcessStartError",
+    "__version__",
+]

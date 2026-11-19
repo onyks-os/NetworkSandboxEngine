@@ -1,0 +1,30 @@
+# Rule coexistence: two independent tables hook the same chain type. An accept
+# in one table does not override a drop in another - each base chain at the hook
+# must accept for the packet to pass. A frequent surprise when a distribution
+# table and an application table are loaded side by side.
+#
+#   sudo nse-runner --file examples/coexistence.yaml
+#
+# Expected: 1 passed, 0 failed, exit code 0.
+tests:
+  - name: "A drop in one table wins over an accept in another"
+    rules: |
+      table inet distribution {
+        chain input {
+          type filter hook input priority 0; policy accept;
+          tcp dport { 80, 8080 } accept
+        }
+      }
+      table ip application {
+        chain input {
+          type filter hook input priority 10; policy accept;
+          tcp dport 8080 drop
+        }
+      }
+    packets:
+      # Accepted by both tables.
+      - {protocol: tcp, src_ip: 10.0.0.1, dst_ip: 10.0.0.2, dst_port: 80, expected_verdict: ACCEPT}
+      # Accepted by "distribution", dropped by "application": dropped.
+      - {protocol: tcp, src_ip: 10.0.0.1, dst_ip: 10.0.0.2, dst_port: 8080, expected_verdict: DROP}
+      # Untouched by both rules: both policies accept.
+      - {protocol: udp, src_ip: 10.0.0.1, dst_ip: 10.0.0.2, dst_port: 9999, expected_verdict: ACCEPT}

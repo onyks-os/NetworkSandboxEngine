@@ -11,7 +11,9 @@ import ipaddress
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationInfo, field_validator
+
+from nse.models.network_config import GatewayNetwork, SimpleNetwork
 
 
 class TopologyType(str, Enum):
@@ -96,3 +98,17 @@ class TestRequest(BaseModel):
         description="Sandbox network topology configuration.",
         examples=[TopologyType.SIMPLE],
     )
+    network: SimpleNetwork | GatewayNetwork | None = Field(
+        default=None,
+        description="Optional explicit addresses; defaults depend on the topology.",
+    )
+
+    @field_validator("network", mode="before")
+    @classmethod
+    def validate_network(cls, value: object, info: ValidationInfo) -> object:
+        if value is None:
+            return None
+        model = (
+            GatewayNetwork if info.data.get("topology") == TopologyType.GATEWAY else SimpleNetwork
+        )
+        return model.model_validate(value)

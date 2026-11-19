@@ -60,7 +60,9 @@ graph LR
    unexpected EOF, a timeout or a crash — and its count of unparsed trace lines
    must be zero.
 6. **Reporting**: canary trace ids are removed from the results, so probes never
-   appear in your verdict stream.
+   appear in your verdict stream. A canary counts as observed only when a trace
+   **matching the canary's packet tuple** arrives, so unrelated traffic in the
+   namespace cannot vouch for the oracle.
 
 Any failure in steps 2, 4 or 5 emits an `error` event. The CLI runner fails on
 error events, and reports them as **oracle errors**, kept separate from firewall
@@ -77,6 +79,17 @@ problems and want different fixes.
   stack shares an id across chains;
 * events from the `nse_trace` scaffolding table are excluded, since they exist
   only to switch tracing on;
+* only **stimulus** traces are counted. The pipeline attributes each trace from
+  the addresses, protocol and ports of its first hook, which runs before any
+  user NAT chain, and records them on every event as `packet_src_ip`,
+  `packet_dst_ip`, `packet_protocol`, `packet_src_port`, `packet_dst_port` and
+  `packet_role` (`stimulus`, `response` or `background`). Later hooks inherit
+  the first role, so translated addresses cannot change it. A server reply, such
+  as the gateway listener's UDP answer being dropped on the way back, is a
+  `response`; spontaneous traffic, such as IPv6 neighbour discovery, is
+  `background`. Both stay in the event stream for diagnosis, but neither adds a
+  verdict. The exact count check is unchanged, so a missing or duplicated
+  stimulus is still an oracle error;
 * `DROP` and `REJECT` beat `ACCEPT`, because a packet accepted by one chain and
   dropped by another did not get through;
 * a trace id that reached the user ruleset but produced **no** verdict is
@@ -85,6 +98,38 @@ problems and want different fixes.
 
 `REJECT` is indistinguishable from `DROP` in the reduced stream, so an
 expectation of `REJECT` is compared as `DROP`.
+
+---
+
+## What the contract proves, and what it does not
+
+The canary, parser and liveness checks are NSE's strongest guarantee, and the
+reason a clean result can be trusted. Each is a positive control on the
+instrument itself:
+
+| Check | Proves |
+| :--- | :--- |
+| Readiness canary | The monitor delivers kernel events for packets on the injection path *before* the stimuli. |
+| Liveness canary | It still delivers them *after* the last stimulus: the stream is not truncated. |
+| Parser health | Every trace line was understood: a format change cannot hide verdicts. |
+| Read-loop health | The monitor ended cleanly, not by EOF, timeout or crash. |
+| Count check (CLI) | One verdict per expected stimulus, no more and no fewer. |
+
+They prove that the **trace oracle** observed the path the canaries took. They
+say nothing about a **capture**. `PCAPAsserter` readiness means its socket is
+armed and filtering on one interface. It does not mean that the traffic you
+care about crosses that interface.
+
+An empty capture is evidence of "nothing left" only next to a positive control
+that shows the same capture seeing the stimulus. Without one, it is no
+evidence at all. `examples/broken_observer.py` runs both failure modes, a blind
+oracle and a capture on the wrong interface, and shows each being caught for
+its own reason. The experiment report keeps these questions apart:
+
+* `result.oracle` and `outcome` describe the trace oracle;
+* each attached `CaptureReport` describes a capture;
+* caller-declared `PositiveControl` entries describe the evidence for the
+  assertion.
 
 ---
 

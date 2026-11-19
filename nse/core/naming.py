@@ -8,6 +8,12 @@ Centralised naming conventions for network namespaces and veth pairs.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import blake2s
+
+
+def interface_suffix(identity: str) -> str:
+    """Use the whole identity within Linux's 15 byte interface name limit."""
+    return blake2s(identity.encode(), digest_size=6).hexdigest()[:11]
 
 
 @dataclass(frozen=True)
@@ -24,7 +30,7 @@ class NamespaceNames:
 
 def derive_names(test_id: str) -> NamespaceNames:
     """Derive deterministic namespace and veth interface names from test_id."""
-    suffix = test_id[:8]
+    suffix = interface_suffix(test_id)
     return NamespaceNames(
         test_id=test_id,
         netns=f"nse_{test_id}",
@@ -37,6 +43,6 @@ def derive_names(test_id: str) -> NamespaceNames:
     )
 
 
-# Prefixes used by the startup cleanup sweep
+# Prefixes used for diagnostic inventory, never as proof of ownership.
 NETNS_SWEEP_PREFIXES = ("nse_", "nsr_", "nss_")
 VETH_SWEEP_PREFIXES = ("vhr-", "vrh-", "vrs-", "vsr-")

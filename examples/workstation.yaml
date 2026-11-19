@@ -1,0 +1,42 @@
+# A workstation firewall: drop by default, let the LAN reach SSH, answer ping,
+# and keep every other service closed - for IPv4 and IPv6 alike (table inet).
+#
+#   sudo nse-runner --file examples/workstation.yaml
+#
+# Expected: 2 passed, 0 failed, exit code 0.
+tests:
+  - name: "Workstation: SSH from the LAN, ping, nothing else (IPv4)"
+    rules: |
+      table inet workstation {
+        chain input {
+          type filter hook input priority 0; policy drop;
+          ct state established,related accept
+          iif "lo" accept
+          ip saddr 10.0.0.0/24 tcp dport 22 accept
+          icmp type echo-request accept
+          icmpv6 type { echo-request, nd-neighbor-solicit, nd-neighbor-advert } accept
+        }
+      }
+    packets:
+      - {protocol: tcp, src_ip: 10.0.0.1, dst_ip: 10.0.0.2, dst_port: 22, expected_verdict: ACCEPT}
+      - {protocol: icmp, src_ip: 10.0.0.1, dst_ip: 10.0.0.2, expected_verdict: ACCEPT}
+      - {protocol: tcp, src_ip: 10.0.0.1, dst_ip: 10.0.0.2, dst_port: 80, expected_verdict: DROP}
+      - {protocol: udp, src_ip: 10.0.0.1, dst_ip: 10.0.0.2, dst_port: 5353, expected_verdict: DROP}
+
+  - name: "Workstation: SSH only from the IPv4 LAN, ping (IPv6)"
+    rules: |
+      table inet workstation {
+        chain input {
+          type filter hook input priority 0; policy drop;
+          ct state established,related accept
+          iif "lo" accept
+          ip saddr 10.0.0.0/24 tcp dport 22 accept
+          icmp type echo-request accept
+          icmpv6 type { echo-request, nd-neighbor-solicit, nd-neighbor-advert } accept
+        }
+      }
+    packets:
+      # The same SSH rule is IPv4-only: over IPv6 the port stays closed.
+      - {protocol: tcp, src_ip: "fd00::1", dst_ip: "fd00::2", dst_port: 22, expected_verdict: DROP}
+      - {protocol: icmp, src_ip: "fd00::1", dst_ip: "fd00::2", expected_verdict: ACCEPT}
+      - {protocol: tcp, src_ip: "fd00::1", dst_ip: "fd00::2", dst_port: 80, expected_verdict: DROP}

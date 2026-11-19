@@ -38,7 +38,7 @@ IS_ROOT = os.geteuid() == 0
 
 
 @patch("nse.core.netns_controller._run")
-def test_netns_lifecycle(mock_run: MagicMock) -> None:
+def test_netns_lifecycle(mock_run: MagicMock, resource_kernel: None) -> None:
     controller = NetnsController()
 
     controller.create_netns("nse_test")
@@ -51,22 +51,23 @@ def test_netns_lifecycle(mock_run: MagicMock) -> None:
 
 
 @patch("nse.core.netns_controller._run")
-def test_create_veth_pair(mock_run: MagicMock) -> None:
-    controller = NetnsController()
+def test_create_veth_pair(mock_run: MagicMock, resource_kernel: None) -> None:
+    controller = NetnsController(use_nsenter=False)
     controller.create_veth_pair("nse_test", "veth-host", "veth-nse", "10.0.0.1/24", "10.0.0.2/24")
 
     calls = [c[0][0] for c in mock_run.call_args_list]
-    assert [
-        resolve("ip"),
-        "link",
-        "add",
-        "veth-host",
-        "type",
-        "veth",
-        "peer",
-        "name",
-        "veth-nse",
-    ] in calls
+    creation = next(command for command in calls if command[1:3] == ["link", "add"])
+    assert creation[:4] == [resolve("ip"), "link", "add", "veth-host"]
+    assert creation[6:11] == ["type", "veth", "peer", "name", "veth-nse"]
+    assert creation[4] == creation[11] == "address"
+    assert creation[5] != creation[12]
+    for interface in ("veth-host", "veth-nse"):
+        alias = next(
+            command
+            for command in calls
+            if command[1:6] == ["link", "set", "dev", interface, "alias"]
+        )
+        assert alias[-1].startswith("nse:")
     assert [resolve("ip"), "link", "set", "veth-nse", "netns", "nse_test"] in calls
     assert [resolve("ip"), "addr", "add", "10.0.0.1/24", "dev", "veth-host"] in calls
     assert [resolve("ip"), "link", "set", "veth-host", "up"] in calls
@@ -308,8 +309,8 @@ def test_trace_event_serialisation() -> None:
 
 
 @patch("nse.core.netns_controller._run")
-def test_create_gateway_topology(mock_run: MagicMock) -> None:
-    controller = NetnsController()
+def test_create_gateway_topology(mock_run: MagicMock, resource_kernel: None) -> None:
+    controller = NetnsController(use_nsenter=False)
     controller.create_gateway_topology(
         router_ns="nse_router_t1",
         server_ns="nse_server_t1",
@@ -368,17 +369,20 @@ def test_start_mock_listener(mock_popen: MagicMock) -> None:
 
 @patch("nse.core.netns_controller._run")
 @pytest.mark.asyncio
-async def test_create_namespace_lifecycle_mocked(mock_run: MagicMock) -> None:
+async def test_create_namespace_lifecycle_mocked(
+    mock_run: MagicMock, resource_kernel: None
+) -> None:
     controller = NetnsController()
 
     controller.create_veth_pair = MagicMock()
     controller.create_netns = MagicMock()
-    controller.destroy_netns = MagicMock()
+    controller._cleanup_run = MagicMock()
 
     async with controller.create_namespace("mock_ttp") as ns:
         assert ns.name == "mock_ttp"
-        assert ns.ext_iface == "vhr-mock_ttp"
-        assert ns.peer_iface == "vrh-mock_ttp"
+        assert ns.ext_iface.startswith("vhr-")
+        assert ns.peer_iface.startswith("vrh-")
+        assert len(ns.ext_iface) == len(ns.peer_iface) == 15
 
         with patch("asyncio.create_subprocess_exec") as mock_exec:
             mock_proc = MagicMock()
@@ -392,24 +396,10 @@ async def test_create_namespace_lifecycle_mocked(mock_run: MagicMock) -> None:
             assert res.returncode == 0
             assert res.stdout == b"output"
 
-    assert controller.destroy_netns.called
+    controller._cleanup_run.assert_called_once()
 
 
-@patch("scapy.all.AsyncSniffer")
-@pytest.mark.asyncio
-async def test_pcap_asserter_mocked(mock_sniffer_cls: MagicMock) -> None:
-    mock_sniffer = MagicMock()
-    mock_sniffer_cls.return_value = mock_sniffer
-
-    asserter = PCAPAsserter(iface="vhr-mock", filter="port 80")
-    assert "port 80" in asserter.filter
-
-    await asserter.start()
-    assert mock_sniffer.start.called
-
-    mock_sniffer.stop.return_value = ["packet1", "packet2"]
-    captured = await asserter.stop()
-    assert captured == ["packet1", "packet2"]
+# PCAPAsserter unit tests live in tests/test_sniffer.py.
 
 
 # ===========================================================================

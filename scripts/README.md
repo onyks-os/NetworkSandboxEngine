@@ -10,4 +10,6 @@ Operational shell scripts. Everything here is linted by `make lint-shell` (Shell
 | Script | Purpose |
 | :----- | :------ |
 | `verify.sh` | Full local gate; invoked by `make verify` in CI and by hand. |
+| `check-blind.sh` | Blindness meta-test behind `make test-blind`: positive control, then a blind run that must fail on its canaries. |
+| `isolated-netns.sh` | Runs a command in a new, empty network namespace; CI uses it for the privileged jobs. |
 <!-- TODO(template): add install.sh / uninstall.sh here if this project touches the host system. -->

@@ -126,6 +126,7 @@ def test_a_binary_in_a_writable_directory_is_refused(tmp_path: Path) -> None:
     """Write access to the directory is enough to replace the file by rename."""
     directory = tmp_path / "bin"
     directory.mkdir(mode=0o777)
+    directory.chmod(0o777)  # mkdir's mode is otherwise masked by the caller's umask.
     _plant(directory, "nft").chmod(0o755)
     with (
         patch("nse.core.paths.TRUSTED_DIRS", (str(directory),)),
@@ -342,7 +343,9 @@ def test_the_s607_guard_would_report_a_bare_binary(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_the_engine_really_invokes_the_trusted_binary(tmp_path: Path, monkeypatch) -> None:
+def test_the_engine_really_invokes_the_trusted_binary(
+    tmp_path: Path, monkeypatch, resource_kernel: None
+) -> None:
     """
     End to end: with a hostile `ip` first on $PATH, the argv the controller hands
     to subprocess still names the trusted absolute path.

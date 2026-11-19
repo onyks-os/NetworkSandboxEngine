@@ -24,14 +24,11 @@ oracle-test: ## Privileged oracle tests + the YAML runner against a real kernel
 # understand nothing, which is what a kernel format change looks like from the
 # outside. The suite MUST fail. Up to 2.0.0 it passed, which is the defect this
 # target exists to prevent from ever coming back.
+# The script also runs a positive control and checks that the failure comes from
+# the canaries, so a host where the suite cannot run at all does not pass it.
 test-blind: ## Prove a blind oracle FAILS the suite instead of passing it
 	@echo "==> [$(PROJECT_SHORT)] Blindness meta-test: a blind parser must fail the run..."
-	@if sudo -E NSE_FORCE_BLIND=1 $(PYTHON) -m nse.cli.runner --file tests/test_suite.yaml; then \
-		echo "!!! FAIL: a blind oracle reported success. The runner is not trustworthy."; \
-		exit 1; \
-	else \
-		echo "==> OK: a blind oracle correctly failed the suite."; \
-	fi
+	@sudo -E bash scripts/check-blind.sh $(PYTHON) tests/test_suite.yaml
 
 
 ##@ Architecture

@@ -23,5 +23,11 @@ updates:
     labels:
       - "dependencies"
     groups:
+      # Pydantic pins an exact pydantic-core version. Updating either pin alone
+      # can leave requirements.txt impossible to install.
+      pydantic:
+        patterns:
+          - "pydantic"
+          - "pydantic-core"
       dev-dependencies:
         dependency-type: "development"

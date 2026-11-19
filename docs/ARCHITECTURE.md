@@ -1,4 +1,4 @@
-# Network Sandbox Engine (NSE) - Technical Architecture (v2.1.0)
+# Network Sandbox Engine (NSE) - Technical Architecture
 
 ## 1. System Goal
 
@@ -19,21 +19,31 @@ archived in 2.1.0; it remains in git history at tag `v2.0.0`.
 NetworkSandboxEngine/
 |
 |-- nse/                        # PyPI wheel (only this directory is packaged)
-|   |-- __init__.py             # Public API: NetnsController, PCAPAsserter, __version__
+|   |-- __init__.py             # Public API: NetnsController, PCAPAsserter, CaptureReport, CaptureLimits, Capture*Error
 |   |-- core/
 |   |   |-- naming.py           # Uniform netns/veth derive_names() and sweep rules
 |   |   |-- netns_controller.py # Namespace lifecycle, veth wiring, and startup sweep
+|   |   |-- process.py          # Managed processes: verified identity, trees, namespace sweep
+|   |   |-- resource_registry.py # Private journals, owner leases and coordinated recovery
+|   |   |-- resource_network.py # Kernel identity and ownership marker verification
 |   |   |-- scapy_injector.py   # L2/L3 packet forging and injection
-|   |   |-- sniffer.py          # PCAPAsserter (AsyncSniffer wrapper)
-|   |   |-- pipeline.py         # run_test_pipeline() orchestrator
+|   |   |-- sniffer.py          # PCAPAsserter (confirmed-ready capture, optional bounded PCAP output)
+|   |   |-- pipeline.py         # One experiment, two entry points: run_test_pipeline() / _report()
+|   |   |-- environment.py      # Versions of NSE, Python, dependencies, kernel and tools
+|   |   |-- verdicts.py         # One verdict per stimulus, shared by the CLI and the report
 |   |   |-- rule_engine.py      # nft load / validate / trace-arm
 |   |   |-- trace_harvester.py  # nft monitor trace parser and readiness probe
-|   |   `-- mock_listener.py    # TCP/UDP echo daemon spawner
+|   |   `-- mock_listener.py    # TCP/UDP echo daemons, started managed and confirmed bound
 |   |-- models/
+|   |   |-- artifacts.py        # ArtifactEntry, SHA-256 hashing, atomic report writes
+|   |   |-- experiment_report.py # ExperimentReport: input, environment, result, observations, run
+|   |   |-- process.py          # ProcessIdentity, EffectiveIdentity, ProcessResult
 |   |   |-- test_request.py     # PacketSpec, TestRequest, TopologyType
 |   |   `-- trace_event.py      # TraceEvent model
 |   `-- cli/
 |       `-- runner.py           # nse-runner CLI entrypoint (YAML/JSON)
+|
+|-- examples/                   # Complete experiments, run by tests/test_examples.py
 |
 |-- tests/
 |   |-- test_netns.py             # Legacy unit suite (namespaces, injection, models)
@@ -70,8 +80,8 @@ Enforced by `import-linter` contracts in `make lint`:
 
 Manages the full lifecycle of network namespaces.
 
-- `create_netns(name)` / `destroy_netns(name)`: raw `ip netns add` / `del`. `destroy_netns` features a 3-attempt exponential backoff retry.
-- `startup_sweep()`: automatically cleans orphan `nse_*`, `nsr_*`, `nss_*` netns and `vhr-*`, `vrh-*`, `vrs-*`, `vsr-*` veth links on initialization.
+- `create_netns(name)` / `destroy_netns(name)`: namespace creation and verified ownership teardown, with three deletion attempts. An unowned or replaced resource is preserved; failed deletions keep their journal records.
+- `startup_sweep()`: recovers only validated abandoned ownership journals whose owner lock is available. Prefix matches are diagnostic, never authorization to delete. Journals are private, scoped to the current network namespace and coordinated across processes. See [Namespace lifecycle](web/explanation/namespace-lifecycle.md).
 - `create_veth_pair(ns, host_iface, peer_iface, host_ip, peer_ip)`: veth creation, peer assignment into the namespace, IP configuration, and link-up.
 - `create_gateway_topology(...)`: three-namespace setup (Host, Router, Server) with dual-stack IPv4/IPv6, sysctl forwarding, and static routes.
 
@@ -122,6 +132,10 @@ async def run_test_pipeline(
 ) -> list[TraceEvent]
 ```
 
+`run_test_pipeline_report(..., timeout=None) -> ExperimentReport` runs the same
+experiment (`_execute`) and returns the full report instead of the event list;
+it records errors by stage instead of raising, and can stop a run at a deadline.
+
 Executing:
 
 1. Network topology setup
@@ -151,18 +165,22 @@ appear in a caller's verdict stream. See
 ```text
   Root (Host) Namespace              Sandbox Namespace ("nse_XYZ")
 +------------------------+          +------------------------+
-|  iface: vhr-XYZ        |          |  iface: veth-nse       |
+|  iface: vhr-XYZ        |          |  iface: vrh-XYZ        |
 |  IPv4: 10.0.0.1/24     |<- veth ->|  IPv4: 10.0.0.2/24     |
 |  IPv6: fd00::1/64      |          |  IPv6: fd00::2/64      |
 +------------------------+          +------------------------+
 ```
+
+`XYZ` is an 11 character digest of the test ID (see
+[Namespace Lifecycle](web/explanation/namespace-lifecycle.md)). Addresses shown
+are the defaults; `TestRequest.network` overrides them so that runs can coexist.
 
 ### 4.2 Gateway (Host - Router - Server)
 
 ```text
    Host (Root)             Router Netns ("nsr_XYZ")             Server Netns ("nss_XYZ")
 +--------------+          +--------------------------------+     +--------------+
-| vhr-XYZ      |<- veth ->| vrh-XYZ  (10.0.1.2/fd00:1::2) |     | veth-nse     |
+| vhr-XYZ      |<- veth ->| vrh-XYZ  (10.0.1.2/fd00:1::2) |     | vsr-XYZ      |
 | 10.0.1.1     |          |                                |<- veth ->| 10.0.2.2     |
 | fd00:1::1    |          | vrs-XYZ  (10.0.2.1/fd00:2::1)  |     | fd00:2::2    |
 +--------------+          +--------------------------------+     +--------------+
@@ -174,5 +192,5 @@ appear in a caller's verdict stream. See
 
 - **Namespace Isolation**: Rulesets are confined to isolated network namespaces identified by per-test UUIDs. `RuleEngine.load()` refuses an empty namespace name, so a missing argument cannot fall through to the host firewall.
 - **No listening surface**: NSE runs as root because `ip netns` and kernel tracing require it, but it opens no socket, port or RPC endpoint. It is invoked, it measures, it exits. The web server that ran in-process as root in 2.0.0 was removed in 2.1.0.
-- **Deterministic teardown**: namespaces and host-side veth interfaces are removed in a `finally` block with retry backoff, and a startup sweep removes anything a previously crashed run left behind.
+- **Owned teardown and recovery**: teardown removes verified owned links before namespace names. Startup recovery acquires an inactive owner's lease and verifies kernel markers/identities before deletion. Uncertain ownership and failed cleanup remain recorded; deleting a namespace name does not terminate processes holding that namespace.
 - **Pre-Validation**: `nft --check` runs before any `load()` call, preventing malformed rulesets from reaching the kernel.

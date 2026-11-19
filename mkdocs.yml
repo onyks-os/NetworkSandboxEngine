@@ -92,6 +92,7 @@ nav:
       - Test Suite YAML: tutorials/test-suites.md
       - Ruleset Debugging: tutorials/debugging-rulesets.md
       - Gateway Topology: tutorials/gateway-topology.md
+      - Worked Examples: tutorials/examples.md
   - How-To Guides:
       - Embedding NSE in Python: how-to/in-process-integration.md
       - Custom Packet Specs: how-to/custom-packets.md
@@ -104,5 +105,7 @@ nav:
       - CLI Commands: reference/cli.md
       - Core API: reference/api.md
       - Configuration & Dependencies: reference/dependencies.md
+      - Benchmarks: reference/benchmarks.md
   - Release Notes:
       - Changelog: release-notes/changelog.md
+      - Upgrading to 2.2: release-notes/upgrading-to-2.2.md

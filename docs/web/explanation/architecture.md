@@ -61,4 +61,6 @@ Rulesets are only ever loaded inside `nse_<id>` / `nsr_<id>` / `nss_<id>`
 namespaces. `RuleEngine.load()` refuses an empty namespace name outright, so a
 missing argument cannot fall through to the host firewall. Teardown removes both
 the namespaces and the host-side veth interfaces, with a retry backoff, and a
-startup sweep removes anything a previous crashed run left behind.
+startup recovery removes only verified abandoned resources whose owner lock is
+available. Unmarked, replaced or uncertain resources are preserved with a
+diagnostic; see [namespace lifecycle](namespace-lifecycle.md).

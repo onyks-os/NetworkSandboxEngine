@@ -1,0 +1,22 @@
+# IPv6-specific policy: a service published only over IPv6, and the same port
+# closed over IPv4. Shows that family matters and that NSE traces both.
+#
+#   sudo nse-runner --file examples/ipv6.yaml
+#
+# Expected: 1 passed, 0 failed, exit code 0.
+tests:
+  - name: "HTTPS over IPv6 only, from the documentation prefix"
+    rules: |
+      table inet edge {
+        chain input {
+          type filter hook input priority 0; policy drop;
+          meta nfproto ipv6 ip6 saddr fd00::/64 tcp dport 443 accept
+          icmpv6 type { echo-request, nd-neighbor-solicit, nd-neighbor-advert } accept
+        }
+      }
+    packets:
+      - {protocol: tcp, src_ip: "fd00::1", dst_ip: "fd00::2", dst_port: 443, expected_verdict: ACCEPT}
+      - {protocol: udp, src_ip: "fd00::1", dst_ip: "fd00::2", dst_port: 443, expected_verdict: DROP}
+      - {protocol: icmp, src_ip: "fd00::1", dst_ip: "fd00::2", expected_verdict: ACCEPT}
+      # Same port over IPv4: no rule accepts it.
+      - {protocol: tcp, src_ip: 10.0.0.1, dst_ip: 10.0.0.2, dst_port: 443, expected_verdict: DROP}

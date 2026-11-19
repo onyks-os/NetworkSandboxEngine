@@ -30,7 +30,7 @@ GITHUB_OWNER  := onyks-os
 VERSION       := $(shell grep -m1 '^version = ' pyproject.toml | cut -d '"' -f2)
 
 # Directories that hold first-party source, tests, and shell scripts.
-SRC_DIRS     := nse
+SRC_DIRS     := nse examples scripts
 TEST_DIRS    := tests
 SCRIPT_DIRS  := scripts
 

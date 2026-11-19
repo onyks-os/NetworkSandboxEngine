@@ -8,7 +8,236 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Thi
 
 ## [Unreleased]
 
+---
+
+## [2.2.0] - 2026-11-19
+
+Results you can verify: who owns each resource, whether the observer was
+ready, and whether what it recorded is complete.
+
+Code written against 2.1.x keeps working. The 2.1.2 API surface is checked by a
+test and on the installed packages. What changes is behaviour that used to fail
+silently: a prefix sweep that could delete someone else's namespace, a capture
+that could start without listening, a listener that could fail to bind
+unnoticed. Each now fails explicitly or is replaced by a guarantee. See
+[Upgrading to 2.2](https://onyks-os.github.io/nse/release-notes/upgrading-to-2.2/) for what to
+check and what you can remove. Qualified against TransparentTorProxy's
+zero-leak suite and the independent NAT gateway example.
+
+### Fixed
+
+- Replace prefix-based startup deletion with private ownership journals,
+  lifetime owner locks and coordinated recovery. Live controllers, unmarked
+  legacy resources, replaced names and uncertain metadata are preserved.
+- Route ordinary teardown through the same ownership checks, including the
+  pipeline's host veth cleanup. A failed setup cannot remove another controller's
+  link; deletion failures retain their records for retry. Namespace and veth
+  method signatures and return types are unchanged, but `destroy_netns()` now
+  removes only resources owned by that controller.
+- Add real two-process traffic tests for normal teardown, SIGKILL and recovery
+  before veth alias application, plus regressions for corrupt metadata,
+  concurrent recoverers and fork/exec lock inheritance. Integration CI now
+  explicitly elevates privileges so these tests execute instead of skipping.
+- Make topology setup transactional: namespaces are reserved under the shared
+  lock before any kernel change, a duplicate run ID in the same controller fails
+  without tearing down the active run, and a failure or cancellation at any
+  setup step rolls back every resource created so far. Cancellation now waits
+  for work already running in a thread before cleanup.
+- Remove name collisions between concurrent runs: interface suffixes are a
+  digest of the whole test ID within Linux's 15 byte limit, and the simple
+  topology no longer creates a fixed `veth-nse` peer in the host namespace (its
+  in-namespace peer is now `vrh-<suffix>`). **Behaviour change:** rules that
+  matched `iifname "veth-nse"` inside the simple sandbox must match
+  `iifname "vrh-*"` or the name from `derive_names()`; `veth-nse` will not
+  return. Setup rejects interface names in use
+  and subnets overlapping existing host routes before touching the kernel.
+- Derive gateway host routes from the configured server subnets and record them
+  as owned resources; pre-existing routes are never replaced or removed.
+- Fix the gateway YAML case reporting three verdicts for two packets: the
+  listener's dropped UDP reply was counted as a verdict. Traces are attributed
+  to stimuli from their first hook; replies and background traffic are kept but
+  not counted, and canaries must match their own packet. Oracle count checks are
+  unchanged.
+- ICMP traffic other than an echo request between the injected addresses (for
+  example an ICMPv6 neighbour solicitation used for reachability probing) is no
+  longer attributed as a stimulus, fixing an intermittent extra verdict in the
+  IPv6 example.
+- `NamespaceSandbox.inject_packet()` now honours the controller's `use_nsenter`
+  choice, fixing injection in containers.
+- A capture filter that fails to compile (invalid expression or libpcap missing)
+  now fails `start()`. With Scapy < 2.6 it was logged and the socket opened
+  **unfiltered**.
+- A namespace whose creation fails because it cannot be entered (for example
+  `ip netns exec` inside some containers) is now rolled back. The failed
+  inspection used to replace the original error and leave the namespace behind.
+- `NamespaceSandbox.exec()` documented accurately: it splits on whitespace and
+  never uses a shell. Its behaviour is unchanged. Cancelling `exec()` or
+  `exec_argv()` now kills and reaps the started process instead of leaving it
+  running.
+- Two packets to the same port no longer start two mock listeners, the second
+  of which failed to bind unnoticed. Listeners used to be given a fixed 150 ms
+  instead of confirming their bind.
+
+### Added
+
+- `TestRequest.network` (`SimpleNetwork` / `GatewayNetwork`) and the YAML
+  `network:` key, for explicit dual stack addresses so independent topologies
+  can run side by side. Defaults are unchanged.
+- `TraceEvent` fields `packet_src_ip`, `packet_dst_ip`, `packet_protocol`,
+  `packet_src_port`, `packet_dst_port` and `packet_role`.
+- `PCAPAsserter.stop_report()` and `nse.CaptureReport`: interface, requested and
+  effective filter, backend and version, timestamps, termination cause, packets
+  and bytes observed/stored, kernel `PACKET_STATISTICS` packets and drops (or
+  `None` with a reason, never an invented zero), errors, and the derived
+  `instrument_healthy` / `window_complete` verdicts.
+- `PCAPAsserter.start(timeout=...)` and `stop(timeout=...)`, plus
+  `nse.CaptureError`, `nse.CaptureStartError` (classified `reason`) and
+  `nse.CaptureStateError`.
+- `NamespaceSandbox.exec_argv(argv)`: runs a program in the namespace with
+  exactly the given arguments (no shell, no splitting), validated before
+  anything starts. Same result and `CalledProcessError` contract as `exec()`.
+- Bounded captures: `PCAPAsserter(output=...)` writes a readable PCAP file
+  progressively and keeps only a declared in-memory sample (none by default).
+  `limits=nse.CaptureLimits(...)` bounds packets, duration, file size and
+  stored packets/bytes. The report gains `output_mode`, `limits`,
+  `limits_reached`, `bytes_stored`, `packets_written`, `bytes_written`,
+  `artifacts` and `artifact_complete`, the termination `limit_reached` and the
+  start failure `output_unavailable`. Without `output=` or `limits=` every
+  packet is kept, as before. A full disk or a write, flush or close error makes
+  the instrument unhealthy, and no limit, slow writer or file error can produce
+  a report that claims a complete window.
+- Managed application processes: `NamespaceSandbox.start_process()` returns a
+  `nse.ManagedProcess` handle, and `run_process()` runs a program to
+  completion. Both take an exact argv and an optional `nse.ProcessIdentity`
+  (UID, GID, groups, capabilities, no_new_privs), applied with `setpriv` after
+  entering the namespace. Before the program runs, the kernel-reported identity
+  of the process itself is compared with the request. A mismatch raises
+  `nse.IdentityError` and never runs the program, with no fallback to root.
+  - Results: `wait(timeout)`, `terminate(grace)` and cancellation stop the
+    whole process group (SIGTERM, then SIGKILL). `nse.ProcessResult` carries
+    the termination cause, exit status, verified identity and output.
+  - Output: captured up to a limit (the excess is counted), discarded or
+    written to a new file.
+  - Readiness: `wait_for_output()` waits for an explicit signal from the
+    process.
+- Reproducible experiment reports: `nse.core.pipeline.run_test_pipeline_report()`
+  runs the same experiment as `run_test_pipeline()` and returns an
+  `nse.ExperimentReport`, which can be rebuilt from a CI artifact alone.
+  - Sections: `input` (request, ruleset and request hashes), `environment`
+    (NSE, Python, dependency, kernel and tool versions), `result`,
+    `observations` and `run`.
+  - `result.outcome` keeps completed, rules invalid, setup failure, instrument
+    failure, execution failure and timeout apart. Errors are recorded with
+    their stage, and teardown errors and residual resources are recorded too.
+  - Captures and caller-declared `nse.PositiveControl` checks are linked with
+    `attach()`, which also hashes the capture files.
+  - JSON output has sorted keys and is written atomically.
+  - `timeout=` stops a run that overruns, then tears it down.
+- `nse-runner --report-dir DIR` writes `report.json` (status, expected and
+  observed verdicts, and the experiment report of every case) and
+  `manifest.json` (SHA-256 of every artifact). Both are written atomically, also
+  for a failed, unreadable or interrupted suite. `--timeout SECONDS` bounds
+  each case.
+- `examples/`: complete experiments with their expected output, which need
+  nothing but NSE:
+  - YAML suites: a workstation firewall, an IPv6-only service, coexisting
+    tables and a NAT gateway;
+  - a real TCP/UDP application running as `nobody`, with a bounded file
+    capture and positive controls;
+  - two experiments that must fail: a wrong policy with a sound observer, and a
+    sound policy with a blind oracle or a misplaced capture.
+
+  CI runs all of them on a real kernel (`tests/test_examples.py`) and checks
+  their exit codes and artifacts. ruff and mypy check them as well.
+- Mock listeners are managed processes that confirm their bind
+  (`nse.core.mock_listener.start_listener`). The pipeline starts one per
+  protocol and port and reports a bind failure as a setup error, never as an
+  unobserved stimulus.
+
+### Changed
+
+- **`nse-runner` fails a case that did not clean up.** A teardown error, or a
+  resource of the run still recorded afterwards, prints `[TEARDOWN ERROR]` and
+  exits 1, even when every verdict matched. Previously a cleanup that left
+  resources behind was only logged. Timeouts, invalid rules and setup failures
+  print `[TIMEOUT]`, `[RULES ERROR]` and `[SETUP ERROR]` instead of
+  `[ORACLE ERROR]`. Output and exit codes are otherwise unchanged.
+- `reduce_verdicts()` lives in `nse.core.verdicts`, so the engine and the CLI
+  share one implementation; `nse.cli.runner.reduce_verdicts` still works.
+- **Deleting a namespace stops every process still inside it**, whether
+  started by NSE or left behind. This includes descendants that detached with
+  `setsid`, which used to keep running in an unnamed namespace. It applies to
+  normal teardown and to crash recovery. Processes are identified by namespace
+  membership through a pidfd, never by a PID that may have been recycled.
+  NSE's own namespace and PID 1's are refused outright.
+
+- **`PCAPAsserter.start()` now returns only when capture is ready.** The kernel
+  socket is filtering and bound when it returns, so a stimulus may be sent
+  immediately; the `sleep()` that callers added after `start()` is no longer
+  needed. The
+  capture loop is NSE's own thread over Scapy's `L2ListenSocket` instead of
+  `AsyncSniffer`, and `stop()` drains packets the kernel already queued instead
+  of discarding them.
+- **Capture failures are errors.** `start()` raises `CaptureStartError` instead of
+  succeeding and failing later; `stop()` keeps returning `list[Packet]` but
+  raises `CaptureError` when the instrument was unhealthy (start failure, backend
+  crash such as a deleted interface, stop timeout). Kernel drops are logged and
+  reported, not raised. Calling `start()` twice, or `stop()` before `start()`,
+  raises `CaptureStateError` (previously a silent no-op returning `[]`). Scapy is
+  now imported at `start()`, not in the constructor.
+
+### Maintenance
+
+- **The 2.1.2 API is a tested contract.** `scripts/api_surface.py` reads the
+  public surface from source (modules, names, methods, attributes, parameter
+  order, kinds and defaults, sync or async, return annotations), and
+  `tests/test_api_compat.py` compares the checkout with the record of the v2.1.2
+  tag in `tests/data/api-2.1.2.json`. The checker's own tests prove it reports
+  each kind of break. `_get_mac_address`, private but used by
+  TransparentTorProxy, is covered as if public.
+- **CI installs the packages it would publish.** The `smoke-pypi` job used an
+  editable install, which imports from the checkout. It now builds the wheel and
+  sdist and installs each in a clean virtualenv outside the checkout, on Python
+  3.10 to 3.13 (`scripts/check-dist.sh`, also `make dist-check` and part of
+  `make release-dry`). It runs the core alone, then the `[cli]` extra, with
+  `pip check`, the 2.1.2 API check against the installed files, the runner's
+  message when PyYAML is missing, and every example suite. ruff and mypy now
+  check `scripts/`.
+- Python 3.13, already tested in CI, is declared in the classifiers.
+- The privileged CI jobs run in a dedicated, empty network namespace
+  (`scripts/isolated-netns.sh`). Some runner hosts route part of NSE's default
+  subnet, which NSE correctly refuses to shadow.
+- `make test-blind` (`scripts/check-blind.sh`) first requires a passing positive
+  control and then requires the blind failure to come from the unobserved
+  canaries. A host where the suite could not run at all used to pass it.
+
+- Update Pydantic and pydantic-core together to 2.14.2 and 2.50.2 using the
+  resolver. Their separate dependency PRs each left an incompatible pair of
+  runtime pins, which the existing installs from `pyproject.toml` did not test.
+- Group Pydantic/core updates in Dependabot and add CI coverage for installation
+  of `requirements.txt` on Python 3.10/3.11 and the minimum Scapy 2.5.0 on Python
+  3.10, including `pip check` and the coverage gate.
+
 ### Documentation
+
+- **Upgrading to 2.2** lists the behaviour changes a 2.1.x caller may notice,
+  the code that can be removed, and what can now be asserted. It includes a
+  measured comparison of the capture readiness race in 2.1.2 and 2.2.0.
+- **Benchmarks** records the measurements behind the 2.2.0 qualification: the
+  capture readiness race, TransparentTorProxy's suite on both versions, and the
+  concurrency checks with the host state compared before and after each run.
+- The generic "Zero Host Mutation" claim is replaced by the exact guarantee.
+  The ruleset under test, forwarding and DAD settings stay inside the
+  namespaces, and the host firewall is never touched. A run does create, and
+  journal, temporary namespaces, the host end of its veth links with their
+  addresses, gateway routes, and ownership records under `/run/nse`.
+- The oracle explanation now presents the canary, parser and liveness checks as
+  the guarantee they are. It also states that capture readiness does not prove
+  a stimulus crossed the captured interface.
+- The namespace lifecycle documents the process boundary.
+- A new "Worked Examples" page shows the expected output of each example.
+- The README names NSE's qualifying consumers, TransparentTorProxy and the NAT
+  gateway example, and lists the decisions that stay with consumers.
 
 - **The README no longer opens with a screenshot of the web interface this
   project removed.** `assets/preview.png` showed the FastAPI/Svelte GUI archived
