@@ -219,6 +219,9 @@ zero-leak suite and the independent NAT gateway example.
 - **Upgrading to 2.2** lists the behaviour changes a 2.1.x caller may notice,
   the code that can be removed, and what can now be asserted. It includes a
   measured comparison of the capture readiness race in 2.1.2 and 2.2.0.
+- **Benchmarks** records the measurements behind the 2.2.0 qualification: the
+  capture readiness race, TransparentTorProxy's suite on both versions, and the
+  concurrency checks with the host state compared before and after each run.
 - The generic "Zero Host Mutation" claim is replaced by the exact guarantee.
   The ruleset under test, forwarding and DAD settings stay inside the
   namespaces, and the host firewall is never touched. A run does create, and

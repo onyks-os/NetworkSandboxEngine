@@ -105,6 +105,7 @@ nav:
       - CLI Commands: reference/cli.md
       - Core API: reference/api.md
       - Configuration & Dependencies: reference/dependencies.md
+      - Benchmarks: reference/benchmarks.md
   - Release Notes:
       - Changelog: release-notes/changelog.md
       - Upgrading to 2.2: release-notes/upgrading-to-2.2.md

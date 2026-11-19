@@ -76,7 +76,8 @@ one, as containment. On 2.2.0 the readiness wait itself takes a median of
 11 ms and at most 20 ms, so each capture is about three times shorter than with
 the 0.2 s sleep, with no misses. The first `start()` of a process also imports
 Scapy (270 ms idle, 740 ms busy in this measurement), which 2.1.x did in the
-constructor.
+constructor. The method, the full figures and the environment are in
+[Benchmarks](../reference/benchmarks.md).
 
 **A fixed wait after `start_mock_listener()`.** `start_mock_listener()` is kept
 as it was: it waits a fixed 150 ms and cannot tell a failed bind from a
