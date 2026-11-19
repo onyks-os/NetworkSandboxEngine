@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import re
 from ipaddress import ip_address
 from typing import Literal
 
 from nse.models.test_request import PacketSpec
 from nse.models.trace_event import TraceEvent
+
+_ICMP_TYPE = re.compile(r"\bicmp(?:v6)? type (\S+)")
 
 
 def packet_matches(event: TraceEvent, spec: PacketSpec, *, reverse: bool = False) -> bool:
@@ -20,7 +23,11 @@ def packet_matches(event: TraceEvent, spec: PacketSpec, *, reverse: bool = False
     ):
         return False
     if spec.protocol == "icmp":
-        return True
+        # The injector sends echo requests only. Neighbour Discovery between
+        # the same two addresses (a unicast NUD probe, for instance) shares
+        # their tuple and would otherwise count as a further stimulus.
+        icmp_type = _ICMP_TYPE.search(event.raw_message or "")
+        return reverse or icmp_type is None or icmp_type.group(1) == "echo-request"
     sport, dport = spec.src_port or 12345, spec.dst_port or 80
     if reverse:
         sport, dport = dport, sport

@@ -91,3 +91,28 @@ def test_first_hook_attribution_survives_nat_and_missing_packet_fields() -> None
     # An unclassified verdict is preserved in legacy reduction; never rounded
     # to a clean result simply because packet metadata was missing.
     assert reduce_verdicts([unidentified]) == ["DROP"]
+
+
+@pytest.mark.parametrize(
+    ("layer", "src", "dst", "icmp"),
+    [("ip6", "fd00::1", "fd00::2", "icmpv6"), ("ip", "192.0.2.1", "192.0.2.2", "icmp")],
+)
+def test_icmp_traffic_other_than_the_echo_request_is_not_a_stimulus(
+    layer: str, src: str, dst: str, icmp: str
+) -> None:
+    # A unicast neighbour solicitation (NUD probe) between the injected
+    # addresses shares their tuple; the ipv6.yaml ruleset accepts it, so
+    # counting it as a stimulus produced a fifth, nondeterministic ACCEPT.
+    attribution = TraceAttribution([PacketSpec(protocol="icmp", src_ip=src, dst_ip=dst)])
+    other = "nd-neighbor-solicit" if icmp == "icmpv6" else "timestamp-request"
+    roles = {}
+    for trace, body in (
+        ("a1", f"{layer} saddr {src} {layer} daddr {dst} {icmp} type echo-request"),
+        ("a2", f"{layer} saddr {src} {layer} daddr {dst} {icmp} type {other}"),
+        ("a3", f"{layer} saddr {dst} {layer} daddr {src} {icmp} type echo-reply"),
+    ):
+        event = hook(trace, body)
+        attribution.observe(event)
+        roles[trace] = event.packet_role
+    assert roles == {"a1": "stimulus", "a2": "background", "a3": "response"}
+    assert list(attribution.stimuli) == ["a1"]

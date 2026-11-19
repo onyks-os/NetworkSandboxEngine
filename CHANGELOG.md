@@ -58,6 +58,10 @@ zero-leak suite and the independent NAT gateway example.
   to stimuli from their first hook; replies and background traffic are kept but
   not counted, and canaries must match their own packet. Oracle count checks are
   unchanged.
+- ICMP traffic other than an echo request between the injected addresses (for
+  example an ICMPv6 neighbour solicitation used for reachability probing) is no
+  longer attributed as a stimulus, fixing an intermittent extra verdict in the
+  IPv6 example.
 - `NamespaceSandbox.inject_packet()` now honours the controller's `use_nsenter`
   choice, fixing injection in containers.
 - A capture filter that fails to compile (invalid expression or libpcap missing)
