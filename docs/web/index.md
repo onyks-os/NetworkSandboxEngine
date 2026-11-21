@@ -8,7 +8,7 @@
 
 Network Sandbox Engine (NSE) is a Python library and CLI tool designed for testing, verifying, and debugging Linux `nftables` firewall rulesets inside ephemeral network namespaces (`netns`).
 
-NSE allows security engineers, tool developers, and CI/CD pipelines to validate complex network filtering rulesets **without touching the host firewall or requiring dedicated VMs**. The ruleset under test is loaded only inside the sandbox namespaces. A run does create temporary namespaces, the host end of its veth links with their addresses, gateway routes to the sandbox subnets, and ownership records under `/run/nse`. Each is journalled before it is created and removed at teardown, or by recovery after a crash.
+NSE allows security engineers, tool developers, and CI/CD pipelines to validate complex network filtering rulesets **without touching the host firewall or requiring dedicated VMs**. The ruleset under test is loaded only inside the sandbox namespaces. A run does create temporary namespaces, the host end of its veth links with their addresses (or, with `isolated_host=True`, a namespace of its own for that end), gateway routes to the sandbox subnets, and ownership records under `/run/nse`. Each is journalled before it is created and removed at teardown, or by recovery after a crash.
 
 ```mermaid
 graph TD

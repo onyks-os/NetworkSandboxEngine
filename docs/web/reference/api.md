@@ -15,7 +15,23 @@ Auto-generated Python API documentation powered by `mkdocstrings`.
 
 ## Netns Controller
 
+`create_namespace(..., isolated_host=True)` puts the host end in its own
+namespace; see
+[the host endpoint](../how-to/in-process-integration.md#the-host-endpoint-and-the-hosts-firewall).
+
 ::: nse.core.netns_controller
+    options:
+      show_root_heading: true
+      show_source: true
+
+---
+
+## Host Firewall Diagnostic
+
+Read once per process by `create_namespace()` in the default topology. It only
+warns; it never fails a setup.
+
+::: nse.core.host_firewall
     options:
       show_root_heading: true
       show_source: true
@@ -76,6 +92,9 @@ so anything it excludes never reaches userspace.
 
 `stop_report()` returns the `CaptureReport` documented below; `stop()` keeps
 returning `list[Packet]` and raises `CaptureError` for an unhealthy capture.
+
+`netns=` captures on an interface in another network namespace; only the
+capture thread enters it.
 
 `output=` writes the capture progressively to a PCAP file and keeps only a
 bounded sample in memory; `limits=` takes a `CaptureLimits` (also exported from

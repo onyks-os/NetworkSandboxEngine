@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from nse.core import resource_registry
+from nse.core import host_firewall, resource_registry
 from nse.core.resource_network import Inspection, NetworkResources
 from nse.core.resource_registry import Resource
 
@@ -14,6 +14,13 @@ def runtime_registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     directory = tmp_path / "runtime"
     monkeypatch.setattr(resource_registry, "RUNTIME_DIR", directory)
     return directory
+
+
+@pytest.fixture(autouse=True)
+def quiet_host_firewall(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Never read the machine's own ruleset: the diagnostic is tested on its own."""
+    monkeypatch.setattr(host_firewall, "_findings", [])
+    monkeypatch.setattr(host_firewall, "_warned", False)
 
 
 @pytest.fixture

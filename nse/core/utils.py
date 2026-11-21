@@ -2,7 +2,40 @@
 # Licensed under the MIT License.
 
 import contextlib
+import ctypes
+import errno
 import os
+
+_CLONE_NEWNET = 0x40000000
+
+
+def enter_netns(name: str) -> None:
+    """Move the calling thread, and only it, into network namespace *name*.
+
+    Linux keeps the network namespace per thread, so a dedicated thread can open
+    sockets inside a namespace while the rest of the process stays where it is.
+    The move cannot be undone: call this only from a thread that exists for the
+    namespace and ends with it. Raises ``OSError(ENODEV)`` when *name* does not
+    exist and ``OSError`` for any other failure, before anything is opened.
+    """
+    if not name or "/" in name or name in (".", ".."):
+        raise ValueError(f"invalid network namespace name: {name!r}")
+    path = os.path.join("/var/run/netns", name)
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_CLOEXEC)
+    except FileNotFoundError as exc:
+        raise OSError(errno.ENODEV, f"network namespace {name!r} does not exist") from exc
+    try:
+        setns = getattr(os, "setns", None)  # Python 3.12+
+        if setns is not None:
+            setns(fd, _CLONE_NEWNET)
+        else:
+            libc = ctypes.CDLL(None, use_errno=True)
+            if libc.setns(fd, _CLONE_NEWNET) != 0:
+                code = ctypes.get_errno()
+                raise OSError(code, os.strerror(code), path)
+    finally:
+        os.close(fd)
 
 
 def is_in_container() -> bool:

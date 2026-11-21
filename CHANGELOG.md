@@ -10,6 +10,68 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Thi
 
 ---
 
+## [2.3.0] - 2026-11-21
+
+The host endpoint without the host's firewall. In the simple topology,
+traffic from the sandbox to `host_ip` used to cross the host's own firewall, and
+a test could blame the rules under test for what firewalld dropped. NSE now
+warns when that can happen, and `isolated_host=True` takes the host endpoint out
+of the host altogether. Everything is opt-in; code written against 2.2.0 and
+2.1.x keeps working unchanged.
+
+### Added
+
+- **`create_namespace(..., isolated_host=True)`** puts the host end of the veth
+  pair in a namespace of its own, `nsh_<name>`, instead of the namespace NSE
+  runs in. Traffic from the sandbox to `host_ip` then no longer crosses the
+  host's firewall. On Fedora, firewalld puts a new `vhr-*` interface in its
+  default zone and drops it, so a test server on `host_ip` never answered and
+  the test blamed the rules under test. The namespace is reserved, recorded and
+  removed with the sandbox, and `host_ip` may overlap a host subnet. The default
+  is unchanged.
+- `NamespaceSandbox.ext_netns` names the namespace holding `ext_iface` (`None`
+  by default). `NamespaceSandbox.host` is the isolated host end as a sandbox of
+  its own, for running a server on `host_ip` or injecting towards the host end.
+  Processes on both ends are stopped when the block exits.
+- `PCAPAsserter(..., netns=...)` captures on an interface in another network
+  namespace. Only the capture thread enters it. `CaptureReport.netns` records
+  it.
+- **A warning when the host firewall may filter the host endpoint.** With the
+  default topology, `create_namespace()` reads the host's nftables ruleset once
+  per process. It logs a warning naming the chain when an `input` hook drops by
+  policy or reaches an unconditional `drop`/`reject`, and suggests
+  `isolated_host=True`. It never fails a setup.
+
+### Changed
+
+- `ScapyInjector.inject(..., host_netns=...)` now also sends an incoming packet
+  from inside `host_netns`. Until now it only looked up the host MAC there and
+  sent from NSE's own namespace, where that interface does not exist. NSE's own
+  callers pass `None` and are unaffected.
+
+### Maintenance
+
+- **The documentation site is published by the release itself.** The Release
+  workflow creates the GitHub Release with `GITHUB_TOKEN`, and events caused by
+  that token start no other workflow. *Publish Documentation* (`release:
+  published`) therefore never ran for 2.1.1 to 2.2.0, and
+  <https://onyks-os.github.io/nse/> still showed 2.1.0. `release.yml` now calls
+  `publish-docs.yml` once PyPI has the version.
+
+### Documentation
+
+- The host endpoint and the host's firewall: what is on the path by default,
+  the warning, and `isolated_host=True`. Covered in the in-process integration
+  guide, the namespace lifecycle (`nsh_<name>`), the README's list of what a
+  run changes on the host, the architecture pages (with the isolated topology)
+  and the API reference (`nse.core.host_firewall`, `PCAPAsserter(netns=...)`).
+- *Releasing* lists the documentation step and how to rerun it on a tag.
+- The README has a *Project statistics* section: stars, PyPI downloads (monthly
+  and total) and the star history, read from outside, with what the counts
+  include.
+
+---
+
 ## [2.2.0] - 2026-11-19
 
 Results you can verify: who owns each resource, whether the observer was

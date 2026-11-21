@@ -71,7 +71,11 @@ class ScapyInjector:
         if spec.src_ip in ("10.0.0.2", "fd00::2", "10.0.2.2", "fd00:2::2"):
             is_incoming = False
 
-        if is_incoming:
+        if is_incoming and host_netns is not None:
+            # Incoming from an isolated host endpoint: the host interface lives
+            # in its own namespace, so the frame is sent from inside it.
+            self._inject_in_netns(spec, host_netns, veth_host, host_mac, peer_mac)
+        elif is_incoming:
             # Incoming: Host -> Netns.
             # Src MAC = host, Dst MAC = peer. Send on host interface.
             src_mac = host_mac
@@ -128,47 +132,39 @@ class ScapyInjector:
         else:
             # Outgoing: Netns -> Host.
             # Src MAC = peer, Dst MAC = host. Send on peer interface from inside netns context.
-            # Fallback to ip netns exec / nsenter since we need to change namespace context.
-            src_mac = peer_mac
-            dst_mac = host_mac
-            inject_interface = veth_peer
+            self._inject_in_netns(spec, netns_name, veth_peer, peer_mac, host_mac)
 
-            script = _build_scapy_script(
-                spec=spec,
-                interface=inject_interface,
-                src_mac=src_mac,
-                dst_mac=dst_mac,
-            )
+    def _inject_in_netns(
+        self, spec: PacketSpec, netns_name: str, interface: str, src_mac: str, dst_mac: str
+    ) -> None:
+        """Send the frame on *interface* from a child process inside *netns_name*."""
+        script = _build_scapy_script(
+            spec=spec,
+            interface=interface,
+            src_mac=src_mac,
+            dst_mac=dst_mac,
+        )
+        logger.debug("Running injection inside netns %s on interface %s", netns_name, interface)
+        cmd = []
+        if self.use_nsenter:
+            cmd += [resolve("nsenter"), f"--net=/var/run/netns/{netns_name}", "--"]
+        else:
+            cmd += [resolve("ip"), "netns", "exec", netns_name]
+        cmd += [sys.executable, "-c", script]
 
-            logger.debug(
-                "Running injection inside netns %s on interface %s",
-                netns_name,
-                inject_interface,
-            )
-            cmd = []
-            if self.use_nsenter:
-                cmd += [resolve("nsenter"), f"--net=/var/run/netns/{netns_name}", "--"]
-            else:
-                cmd += [resolve("ip"), "netns", "exec", netns_name]
-            cmd += [
-                sys.executable,
-                "-c",
-                script,
-            ]
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10.0,
+        )
 
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=10.0,
-            )
+        if result.returncode != 0:
+            logger.error("Scapy injection failed:\n%s", result.stderr)
+            raise RuntimeError(f"Packet injection failed: {result.stderr.strip()}")
 
-            if result.returncode != 0:
-                logger.error("Scapy injection failed:\n%s", result.stderr)
-                raise RuntimeError(f"Packet injection failed: {result.stderr.strip()}")
-
-            logger.debug("Injection stdout: %s", result.stdout.strip())
+        logger.debug("Injection stdout: %s", result.stdout.strip())
 
 
 # ---------------------------------------------------------------------------

@@ -8,7 +8,19 @@
 # not whatever happened to land on the default branch.
 name: Publish Documentation
 
+#
+# The Release workflow creates the GitHub Release with GITHUB_TOKEN, and events
+# caused by that token start no other workflow: `release: published` never fired
+# for 2.1.1 to 2.2.0, so the site stayed at 2.1.0. The Release workflow now calls
+# this one directly (workflow_call) once PyPI has the version; the release trigger
+# remains for a release published by hand.
 on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Released tag to build the documentation from.
+        required: true
+        type: string
   release:
     types: [published]
   # For republishing after a site-side change; builds from the default branch,
@@ -33,6 +45,7 @@ jobs:
       # released source rather than main.
       - uses: actions/checkout@v7
         with:
+          ref: ${{ inputs.ref || github.ref }}
           persist-credentials: false
 
       - uses: actions/setup-python@v7
@@ -68,7 +81,7 @@ jobs:
       - name: Commit and push
         working-directory: site-repo
         env:
-          VERSION: ${{ github.event.release.tag_name || github.ref_name }}
+          VERSION: ${{ inputs.ref || github.event.release.tag_name || github.ref_name }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

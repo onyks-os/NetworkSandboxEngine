@@ -662,11 +662,33 @@ def test_injector_looks_up_the_host_mac_in_the_given_namespace() -> None:
 
     with (
         patch("nse.core.scapy_injector._get_mac_address", side_effect=fake_mac),
-        patch("scapy.all.sendp"),
+        patch.object(ScapyInjector, "_inject_in_netns"),
     ):
         ScapyInjector().inject(spec, "nsr_abc", "vrh-abc", "veth-nse", host_netns="nsr_abc")
 
     assert ("vrh-abc", "nsr_abc") in seen
+
+
+def test_injector_sends_from_the_host_namespace_when_it_is_not_nses() -> None:
+    """An isolated host endpoint: the frame must leave from inside its namespace."""
+    from nse.core.scapy_injector import ScapyInjector
+
+    spec = PacketSpec(protocol="udp", dst_port=53, src_ip="10.0.1.1", dst_ip="10.0.1.2")
+    macs = {"vhr-abc": "aa:aa:aa:aa:aa:aa", "vrh-abc": "bb:bb:bb:bb:bb:bb"}
+    with (
+        patch(
+            "nse.core.scapy_injector._get_mac_address",
+            side_effect=lambda iface, *_args, **_kw: macs[iface],
+        ),
+        patch("scapy.all.sendp") as sendp,
+        patch.object(ScapyInjector, "_inject_in_netns") as in_netns,
+    ):
+        ScapyInjector().inject(spec, "nse_abc", "vhr-abc", "vrh-abc", host_netns="nsh_nse_abc")
+
+    sendp.assert_not_called()
+    in_netns.assert_called_once_with(
+        spec, "nsh_nse_abc", "vhr-abc", "aa:aa:aa:aa:aa:aa", "bb:bb:bb:bb:bb:bb"
+    )
 
 
 def test_injector_sends_ipv6_in_process() -> None:

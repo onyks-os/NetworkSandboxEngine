@@ -106,6 +106,10 @@ class CaptureReport(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     iface: str = Field(description="Interface the capture was armed on.")
+    netns: str | None = Field(
+        default=None,
+        description="Network namespace holding the interface; None for the namespace NSE runs in.",
+    )
     requested_filter: str | None = Field(description="Filter passed by the caller, if any.")
     effective_filter: str = Field(description="BPF expression actually attached in the kernel.")
     default_filter_replaced: bool = Field(

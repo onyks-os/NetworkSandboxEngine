@@ -64,3 +64,10 @@ the namespaces and the host-side veth interfaces, with a retry backoff, and a
 startup recovery removes only verified abandoned resources whose owner lock is
 available. Unmarked, replaced or uncertain resources are preserved with a
 diagnostic; see [namespace lifecycle](namespace-lifecycle.md).
+
+The host firewall is not modified, but by default it is on the path from the
+sandbox to the host end of the link. That traffic is local input for the
+host. NSE warns when an `input` hook may filter it, and
+`create_namespace(..., isolated_host=True)` moves that end into a namespace of
+its own; see
+[the host endpoint](../how-to/in-process-integration.md#the-host-endpoint-and-the-hosts-firewall).

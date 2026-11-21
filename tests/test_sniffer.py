@@ -970,3 +970,41 @@ async def test_a_thread_killed_before_readiness_does_not_leave_start_waiting(
     assert time.monotonic() - began < 2  # answered at once, not at the start deadline
     assert caught.value.reason == "backend_error"
     assert "exited before readiness" in str(caught.value)
+
+
+async def test_a_capture_in_another_namespace_enters_it_from_the_capture_thread(
+    backend: Backend,
+) -> None:
+    entered: list[tuple[str, str]] = []
+    with patch.object(
+        sniffer, "enter_netns", lambda name: entered.append((name, threading.current_thread().name))
+    ):
+        asserter = PCAPAsserter(iface="vhr-x", netns="nsh_x")
+        await asserter.start()
+        report = await asserter.stop_report()
+    assert entered == [("nsh_x", "nse-capture-vhr-x")]
+    assert backend.iface == "vhr-x"
+    assert report.netns == "nsh_x"
+    assert report.termination == "stopped"
+
+
+async def test_a_missing_capture_namespace_is_a_missing_interface(backend: Backend) -> None:
+    def missing(name: str) -> None:
+        raise OSError(errno.ENODEV, f"network namespace {name!r} does not exist")
+
+    with patch.object(sniffer, "enter_netns", missing):
+        asserter = PCAPAsserter(iface="vhr-x", netns="nsh_gone")
+        with pytest.raises(CaptureStartError) as info:
+            await asserter.start()
+    assert info.value.reason == "interface_missing"
+    assert "nsh_gone" in str(info.value)
+    assert not hasattr(backend, "iface")  # no socket was opened
+
+
+async def test_a_capture_without_netns_stays_in_nses_namespace(backend: Backend) -> None:
+    with patch.object(sniffer, "enter_netns") as enter:
+        asserter = PCAPAsserter(iface="veth0")
+        await asserter.start()
+        report = await asserter.stop_report()
+    enter.assert_not_called()
+    assert report.netns is None
