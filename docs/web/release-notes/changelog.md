@@ -8,6 +8,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Thi
 
 ## [Unreleased]
 
+---
+
+## [2.3.0] - 2026-11-21
+
+The host endpoint without the host's firewall. In the simple topology,
+traffic from the sandbox to `host_ip` used to cross the host's own firewall, and
+a test could blame the rules under test for what firewalld dropped. NSE now
+warns when that can happen, and `isolated_host=True` takes the host endpoint out
+of the host altogether. Everything is opt-in; code written against 2.2.0 and
+2.1.x keeps working unchanged.
+
 ### Added
 
 - **`create_namespace(..., isolated_host=True)`** puts the host end of the veth
