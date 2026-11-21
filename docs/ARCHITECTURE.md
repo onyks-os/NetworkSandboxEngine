@@ -22,6 +22,7 @@ NetworkSandboxEngine/
 |   |-- __init__.py             # Public API: NetnsController, PCAPAsserter, CaptureReport, CaptureLimits, Capture*Error
 |   |-- core/
 |   |   |-- naming.py           # Uniform netns/veth derive_names() and sweep rules
+|   |   |-- host_firewall.py    # Warns when the host's input hooks may filter the host endpoint
 |   |   |-- netns_controller.py # Namespace lifecycle, veth wiring, and startup sweep
 |   |   |-- process.py          # Managed processes: verified identity, trees, namespace sweep
 |   |   |-- resource_registry.py # Private journals, owner leases and coordinated recovery
@@ -83,6 +84,7 @@ Manages the full lifecycle of network namespaces.
 - `create_netns(name)` / `destroy_netns(name)`: namespace creation and verified ownership teardown, with three deletion attempts. An unowned or replaced resource is preserved; failed deletions keep their journal records.
 - `startup_sweep()`: recovers only validated abandoned ownership journals whose owner lock is available. Prefix matches are diagnostic, never authorization to delete. Journals are private, scoped to the current network namespace and coordinated across processes. See [Namespace lifecycle](web/explanation/namespace-lifecycle.md).
 - `create_veth_pair(ns, host_iface, peer_iface, host_ip, peer_ip)`: veth creation, peer assignment into the namespace, IP configuration, and link-up.
+- `create_namespace(name, host_ip, peer_ip, *, isolated_host=False)`: the simple topology as an async context manager yielding a `NamespaceSandbox`. With `isolated_host=True` the host end lives in `nsh_<name>` (`sandbox.ext_netns`) and `sandbox.host` runs programs there; otherwise the host's nftables ruleset is read once per process and a warning is logged if an `input` hook may filter traffic to `host_ip` (`host_firewall.py`).
 - `create_gateway_topology(...)`: three-namespace setup (Host, Router, Server) with dual-stack IPv4/IPv6, sysctl forwarding, and static routes.
 
 ### 3.2 `RuleEngine` (`nse/core/rule_engine.py`)
@@ -174,6 +176,20 @@ appear in a caller's verdict stream. See
 `XYZ` is an 11 character digest of the test ID (see
 [Namespace Lifecycle](web/explanation/namespace-lifecycle.md)). Addresses shown
 are the defaults; `TestRequest.network` overrides them so that runs can coexist.
+
+Traffic from the sandbox to the host end is local input for the host namespace
+and crosses the host's firewall. `create_namespace(..., isolated_host=True)`
+replaces the root namespace on the left with `nsh_<name>`, so no host rule is on
+the path:
+
+```text
+  Host endpoint ("nsh_<name>")       Sandbox Namespace ("<name>")
++------------------------+          +------------------------+
+|  iface: vhr-XYZ        |          |  iface: vrh-XYZ        |
+|  IPv4: 10.0.1.1/24     |<- veth ->|  IPv4: 10.0.1.2/24     |
+|  IPv6: fd00::1/64      |          |  IPv6: fd00::2/64      |
++------------------------+          +------------------------+
+```
 
 ### 4.2 Gateway (Host - Router - Server)
 

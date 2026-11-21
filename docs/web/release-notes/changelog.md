@@ -38,6 +38,27 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Thi
   sent from NSE's own namespace, where that interface does not exist. NSE's own
   callers pass `None` and are unaffected.
 
+### Maintenance
+
+- **The documentation site is published by the release itself.** The Release
+  workflow creates the GitHub Release with `GITHUB_TOKEN`, and events caused by
+  that token start no other workflow. *Publish Documentation* (`release:
+  published`) therefore never ran for 2.1.1 to 2.2.0, and
+  <https://onyks-os.github.io/nse/> still showed 2.1.0. `release.yml` now calls
+  `publish-docs.yml` once PyPI has the version.
+
+### Documentation
+
+- The host endpoint and the host's firewall: what is on the path by default,
+  the warning, and `isolated_host=True`. Covered in the in-process integration
+  guide, the namespace lifecycle (`nsh_<name>`), the README's list of what a
+  run changes on the host, the architecture pages (with the isolated topology)
+  and the API reference (`nse.core.host_firewall`, `PCAPAsserter(netns=...)`).
+- *Releasing* lists the documentation step and how to rerun it on a tag.
+- The README has a *Project statistics* section: stars, PyPI downloads (monthly
+  and total) and the star history, read from outside, with what the counts
+  include.
+
 ---
 
 ## [2.2.0] - 2026-11-19

@@ -28,6 +28,11 @@ Pushing the tag runs `.github/workflows/release.yml`, which:
 6. **installs from TestPyPI and smoke-tests it** — `nse-runner --help` runs, the
    engine imports, and `nse.__version__` matches the tag;
 7. only then uploads to **PyPI**.
+8. publishes the documentation built from the tag to
+   <https://onyks-os.github.io/nse/>, by calling `publish-docs.yml`. It is
+   called, not triggered: a release created with `GITHUB_TOKEN` starts no
+   `release: published` workflow, which is why the site stayed at 2.1.0 through
+   2.2.0. It needs the `DOCS_SITE_TOKEN` secret.
 
 The bytes PyPI receives are the bytes Sigstore signed: nothing is rebuilt between
 steps. A broken distribution is caught on the index nobody depends on, not the
@@ -78,6 +83,10 @@ attestation describe a build that no longer exists.
 
 **The release job failed before publishing.** Delete the tag locally and
 remotely, fix, tag again. Nothing was published, so nothing is stale.
+
+**The documentation was not published.** PyPI already has the version, so do
+not tag again: run *Publish Documentation* by hand on the tag,
+`gh workflow run publish-docs.yml --ref vX.Y.Z`.
 
 **A version is already on PyPI.** The `publish-pypi` job deliberately has no
 `skip-existing`. A duplicate version means something is wrong with the release

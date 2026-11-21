@@ -59,6 +59,13 @@ Key architectural properties:
 | In the gateway topology, routes to the sandbox subnets via that link | Existing interfaces, addresses and routes |
 | Ownership journals and locks under `/run/nse` | Anything outside the run's own records |
 
+With `create_namespace(..., isolated_host=True)` the host end of the link is not
+in the host either: it goes into a namespace of its own, `nsh_<name>`, created and
+removed with the sandbox. By default, traffic from the sandbox to the host end
+is local input for the host and crosses the host's own firewall. firewalld, for
+one, drops it. NSE warns when the host ruleset may filter it; see
+[the host endpoint](https://onyks-os.github.io/nse/how-to/in-process-integration/#the-host-endpoint-and-the-hosts-firewall).
+
 Every one of these is recorded in an ownership journal before it is created,
 and removed at teardown, or by the next NSE start if a run was killed.
 Processes still running in a sandbox namespace are stopped before it is deleted.
@@ -127,7 +134,8 @@ assert not leaked, leaked
 
 `stop()` raises when the capture itself failed, and `stop_report()` says
 whether the window was complete. Long captures can go to a PCAP file with
-bounded memory.
+bounded memory. For an interface in another namespace, pass `netns=`: only the
+capture thread enters it.
 
 None of that proves the capture was watching the path the stimulus took.
 Readiness means the socket was armed on *that* interface; it does not mean the
@@ -445,6 +453,31 @@ make ci-local
 ```
 
 ---
+
+## Project statistics
+
+<p>
+  <a href="https://github.com/onyks-os/NetworkSandboxEngine/stargazers"><img src="https://img.shields.io/github/stars/onyks-os/NetworkSandboxEngine?style=flat-square&logo=github" alt="GitHub stars"></a>
+  <a href="https://pypistats.org/packages/network-sandbox-engine"><img src="https://img.shields.io/pypi/dm/network-sandbox-engine?style=flat-square&logo=pypi" alt="PyPI downloads per month"></a>
+  <a href="https://pepy.tech/projects/network-sandbox-engine"><img src="https://img.shields.io/pepy/dt/network-sandbox-engine?style=flat-square&logo=pypi&label=total%20downloads" alt="PyPI downloads in total"></a>
+</p>
+
+<a href="https://star-history.com/#onyks-os/NetworkSandboxEngine&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=onyks-os%2Fnetworksandboxengine&type=Date&theme=dark">
+    <img src="https://api.star-history.com/svg?repos=onyks-os%2Fnetworksandboxengine&type=Date" alt="Star history" width="600">
+  </picture>
+</a>
+
+NSE has no telemetry and never will: these numbers are read from outside. NSE
+is installed from PyPI, so its download counts are PyPI's: monthly from
+[pypistats](https://pypistats.org/packages/network-sandbox-engine), which leaves
+out known mirrors, and in total from
+[pepy](https://pepy.tech/projects/network-sandbox-engine). Both include CI
+pipelines that install NSE on every run, and one person installing twice counts
+twice. The files attached to GitHub releases are not counted here. They exist
+for verification, and every one of them has been fetched once or twice, by
+automation as far as the counts can tell.
 
 ## License
 
