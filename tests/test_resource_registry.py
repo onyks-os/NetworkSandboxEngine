@@ -259,7 +259,10 @@ def test_scope_changes_closed_registry_and_missing_runtime_are_safe() -> None:
     registry.close()
     with pytest.raises(OwnershipError, match="closure"), registry.edit():
         pass
-    assert namespace_identity("nse_nonexistent") is None
+    # Simulated: on a host where root created /var/run/netns mode 0750, an
+    # unprivileged run would see EACCES instead of a missing namespace.
+    with patch.object(Path, "stat", side_effect=FileNotFoundError):
+        assert namespace_identity("nse_nonexistent") is None
 
 
 def test_atomic_write_failure_leaves_previous_journal_and_no_temporary_files() -> None:

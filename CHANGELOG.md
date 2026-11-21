@@ -8,6 +8,36 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Thi
 
 ## [Unreleased]
 
+### Added
+
+- **`create_namespace(..., isolated_host=True)`** puts the host end of the veth
+  pair in a namespace of its own, `nsh_<name>`, instead of the namespace NSE
+  runs in. Traffic from the sandbox to `host_ip` then no longer crosses the
+  host's firewall. On Fedora, firewalld puts a new `vhr-*` interface in its
+  default zone and drops it, so a test server on `host_ip` never answered and
+  the test blamed the rules under test. The namespace is reserved, recorded and
+  removed with the sandbox, and `host_ip` may overlap a host subnet. The default
+  is unchanged.
+- `NamespaceSandbox.ext_netns` names the namespace holding `ext_iface` (`None`
+  by default). `NamespaceSandbox.host` is the isolated host end as a sandbox of
+  its own, for running a server on `host_ip` or injecting towards the host end.
+  Processes on both ends are stopped when the block exits.
+- `PCAPAsserter(..., netns=...)` captures on an interface in another network
+  namespace. Only the capture thread enters it. `CaptureReport.netns` records
+  it.
+- **A warning when the host firewall may filter the host endpoint.** With the
+  default topology, `create_namespace()` reads the host's nftables ruleset once
+  per process. It logs a warning naming the chain when an `input` hook drops by
+  policy or reaches an unconditional `drop`/`reject`, and suggests
+  `isolated_host=True`. It never fails a setup.
+
+### Changed
+
+- `ScapyInjector.inject(..., host_netns=...)` now also sends an incoming packet
+  from inside `host_netns`. Until now it only looked up the host MAC there and
+  sent from NSE's own namespace, where that interface does not exist. NSE's own
+  callers pass `None` and are unaffected.
+
 ---
 
 ## [2.2.0] - 2026-11-19

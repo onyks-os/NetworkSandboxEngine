@@ -22,6 +22,7 @@ from ipaddress import ip_interface, ip_network
 from typing import TYPE_CHECKING, Any, cast
 
 from nse.core.async_work import run_blocking
+from nse.core.host_firewall import warn_if_filtered
 from nse.core.naming import NamespaceNames, interface_suffix
 from nse.core.paths import resolve
 from nse.core.process import (
@@ -70,12 +71,21 @@ class NamespaceSandbox:
     Provides utility methods to execute commands and inject packets inside the sandbox context.
     """
 
-    def __init__(self, controller: NetnsController, name: str) -> None:
+    def __init__(
+        self, controller: NetnsController, name: str, *, ext_netns: str | None = None
+    ) -> None:
         self.controller = controller
         self.name = name
         # We derive interface names from the sandbox name
         self.ext_iface = f"vhr-{interface_suffix(name)}"
         self.peer_iface = f"vrh-{interface_suffix(name)}"
+        #: Namespace holding :attr:`ext_iface`: None when it is the namespace NSE
+        #: runs in, the host endpoint's own namespace with ``isolated_host=True``.
+        self.ext_netns = ext_netns
+        #: With ``isolated_host=True``, the host endpoint as a sandbox of its own:
+        #: run a server on ``host_ip`` with ``sandbox.host.start_process()``.
+        #: Its :attr:`ext_iface` is this sandbox's :attr:`peer_iface`, and back.
+        self.host: NamespaceSandbox | None = None
         self._source_v4 = "10.0.1.1"
         self._source_v6 = "fd00:1::1"
         self._processes: list[ManagedProcess] = []
@@ -249,6 +259,7 @@ class NamespaceSandbox:
             self.name,
             self.ext_iface,
             self.peer_iface,
+            self.ext_netns,
         )
 
 
@@ -674,31 +685,65 @@ class NetnsController:
         name: str,
         host_ip: str | list[str] = "10.0.1.1/24",
         peer_ip: str | list[str] = "10.0.1.2/24",
+        *,
+        isolated_host: bool = False,
     ) -> AsyncIterator[NamespaceSandbox]:
         """
         Context manager to safely construct and teardown an isolated namespace.
+
+        By default the host end of the veth pair, with *host_ip*, is in the
+        namespace NSE runs in, so traffic from the sandbox to *host_ip* crosses
+        the host's own firewall; NSE logs a warning when that firewall may filter
+        it. With *isolated_host*, the host end goes into a namespace of its own,
+        ``nsh_<name>`` (:attr:`NamespaceSandbox.ext_netns`), created and removed
+        with the sandbox: no host rule, route or firewall is on the path, and
+        *host_ip* may overlap a host subnet. Run programs there through
+        :attr:`NamespaceSandbox.host` and capture there with
+        ``PCAPAsserter(iface=sandbox.ext_iface, netns=sandbox.ext_netns)``.
         """
-        sandbox = NamespaceSandbox(self, name)
+        host_ns = f"nsh_{name}" if isolated_host else None
+        sandbox = NamespaceSandbox(self, name, ext_netns=host_ns)
 
         run_id = uuid.uuid4().hex
 
         def setup() -> None:
-            with self._transaction((name,), run_id):
-                config = self._simple_network(host_ip, peer_ip)
+            namespaces = (name,) if host_ns is None else (name, host_ns)
+            with self._transaction(namespaces, run_id):
                 self._preflight(
-                    (sandbox.ext_iface, sandbox.peer_iface), (config.host_v4, config.host_v6)
+                    (sandbox.ext_iface, sandbox.peer_iface),
+                    # An isolated endpoint shares no routing table with the host.
+                    (config.host_v4, config.host_v6) if host_ns is None else (),
                 )
                 sandbox._source_v4 = str(ip_interface(config.host_v4).ip)
                 sandbox._source_v6 = str(ip_interface(config.host_v6).ip)
                 self.create_netns(name)
-                self.create_veth_pair(name, sandbox.ext_iface, sandbox.peer_iface, host_ip, peer_ip)
+                if host_ns is None:
+                    self.create_veth_pair(
+                        name, sandbox.ext_iface, sandbox.peer_iface, host_ip, peer_ip
+                    )
+                    return
+                self.create_netns(host_ns)
+                self._configure_pair(
+                    name, sandbox.ext_iface, sandbox.peer_iface, config, host_netns=host_ns
+                )
+                view = NamespaceSandbox(self, host_ns, ext_netns=name)
+                view.ext_iface, view.peer_iface = sandbox.peer_iface, sandbox.ext_iface
+                view._source_v4 = str(ip_interface(config.peer_v4).ip)
+                view._source_v6 = str(ip_interface(config.peer_v6).ip)
+                sandbox.host = view
 
+        config = self._simple_network(host_ip, peer_ip)
         try:
             await run_blocking(setup)
+            if host_ns is None:
+                await run_blocking(warn_if_filtered, name, [config.host_v4, config.host_v6])
             yield sandbox
         finally:
             try:
-                await sandbox._stop_processes()
+                await asyncio.gather(
+                    sandbox._stop_processes(),
+                    *([sandbox.host._stop_processes()] if sandbox.host else []),
+                )
             finally:
                 await run_blocking(self._cleanup_run, run_id)
 
@@ -738,22 +783,32 @@ class NetnsController:
                 raise
 
     def _configure_pair(
-        self, netns_name: str, veth_host: str, veth_peer: str, config: SimpleNetwork
+        self,
+        netns_name: str,
+        veth_host: str,
+        veth_peer: str,
+        config: SimpleNetwork,
+        host_netns: str | None = None,
     ) -> None:
         v4_host, v6_host = config.host_v4, config.host_v6
         v4_peer, v6_peer = config.peer_v4, config.peer_v6
+        # Commands for the host end run where it lives: NSE's own namespace, or
+        # the isolated host endpoint's.
+        host = self._resources.prefix(host_netns)
 
-        # Create veth pair in the root namespace
-        self._create_owned_pair(veth_host, veth_peer, netns_name)
+        # Create the veth pair on the host side
+        self._create_owned_pair(veth_host, veth_peer, netns_name, host_netns)
         # Move the peer end into the target namespace
-        _run([resolve("ip"), "link", "set", veth_peer, "netns", netns_name])
+        _run([*host, resolve("ip"), "link", "set", veth_peer, "netns", netns_name])
 
         # --- Host side ---
         if v4_host:
-            _run([resolve("ip"), "addr", "add", v4_host, "dev", veth_host])
+            _run([*host, resolve("ip"), "addr", "add", v4_host, "dev", veth_host])
         if v6_host:
-            _run([resolve("ip"), "addr", "add", v6_host, "dev", veth_host])
-        _run([resolve("ip"), "link", "set", veth_host, "up"])
+            _run([*host, resolve("ip"), "addr", "add", v6_host, "dev", veth_host])
+        _run([*host, resolve("ip"), "link", "set", veth_host, "up"])
+        if host_netns is not None:
+            _run([*host, resolve("ip"), "link", "set", "lo", "up"])
 
         # --- Namespace side ---
         if v4_peer:

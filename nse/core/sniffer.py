@@ -56,6 +56,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Literal
 
 from nse.core.async_work import finish_work
+from nse.core.utils import enter_netns
 from nse.models.capture_report import (
     PCAP_HEADER_BYTES,
     PCAP_RECORD_HEADER_BYTES,
@@ -266,9 +267,11 @@ class _CaptureLoop(threading.Thread):
         on_ready: Callable[[BaseException | None], None],
         limits: CaptureLimits | None = None,
         output: str | None = None,
+        netns: str | None = None,
     ) -> None:
         super().__init__(name=f"nse-capture-{iface}", daemon=True)
         self.iface = iface
+        self.netns = netns
         self.bpf = bpf
         self._on_ready = on_ready
         self._signalled = False
@@ -315,6 +318,10 @@ class _CaptureLoop(threading.Thread):
         sock: Any = None
         try:
             try:
+                if self.netns is not None:
+                    # Only this thread moves: the interface is looked up and the
+                    # socket created and bound in that namespace.
+                    enter_netns(self.netns)
                 sock = _open_socket(self.iface, self.bpf)
                 if self.output is not None:
                     self.writer = _PcapFile(self.output, _linktype(sock))
@@ -500,9 +507,15 @@ class PCAPAsserter:
         replace_default_filter: bool = False,
         output: str | os.PathLike[str] | None = None,
         limits: CaptureLimits | None = None,
+        netns: str | None = None,
     ) -> None:
         """
         Arm a sniffer on *iface*.
+
+        *netns* names the network namespace that holds *iface*; by default it is
+        the namespace NSE runs in. The capture thread enters it before opening
+        the socket, so nothing else in the process changes namespace. For a
+        sandbox, pass ``iface=sandbox.ext_iface, netns=sandbox.ext_netns``.
 
         *filter* is combined with :data:`DEFAULT_FILTER` unless
         *replace_default_filter* is set, in which case it is used alone. The
@@ -529,6 +542,7 @@ class PCAPAsserter:
         self.output = None if output is None else os.path.abspath(os.fspath(output))
         self.limits = limits
         self.iface = iface
+        self.netns = netns
         self.requested_filter = filter
         self.replace_default_filter = bool(filter) and replace_default_filter
         if filter and replace_default_filter:
@@ -578,7 +592,9 @@ class PCAPAsserter:
             with contextlib.suppress(RuntimeError):  # loop closed: nobody is waiting
                 loop.call_soon_threadsafe(resolve)
 
-        thread = _CaptureLoop(self.iface, self.filter, on_ready, self.limits, self.output)
+        thread = _CaptureLoop(
+            self.iface, self.filter, on_ready, self.limits, self.output, self.netns
+        )
         self._loop_thread = thread
         try:
             thread.start()
@@ -733,6 +749,7 @@ class PCAPAsserter:
 
         self._report = CaptureReport(
             iface=self.iface,
+            netns=self.netns,
             requested_filter=self.requested_filter,
             effective_filter=self.filter,
             default_filter_replaced=self.replace_default_filter,

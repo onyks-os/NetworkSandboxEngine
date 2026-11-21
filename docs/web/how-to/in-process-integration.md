@@ -296,6 +296,50 @@ PID is never signalled, and recovery needs no record of PIDs. The one thing
 outside the boundary is a process that moves itself to another network
 namespace, which needs `CAP_SYS_ADMIN`. A dropped identity rules that out.
 
+### The host endpoint and the host's firewall
+
+By default the host end of the veth pair, `ext_iface` with `host_ip`, is in the
+namespace NSE runs in. Traffic from the sandbox to `host_ip` is then local input
+for that namespace and crosses its firewall. On Fedora, for example, firewalld
+puts the new `vhr-*` interface in the default zone, which accepts almost
+nothing. A server listening on `host_ip` never receives the request, and a test
+reads the silence as the rules under test blocking it.
+
+NSE reads the host's nftables ruleset once per process and logs a warning when
+an `input` hook may filter that traffic: a `drop` policy, or a `drop`/`reject`
+reached unconditionally. It cannot tell which port a test uses, so it only
+warns. Rules loaded with `iptables-legacy` are not visible to it.
+
+To take the host's firewall out of the path, pass `isolated_host=True`. The
+host end then goes into a namespace of its own, `nsh_<name>`, created and
+removed with the sandbox:
+
+```python
+from nse import PCAPAsserter
+
+async with controller.create_namespace("nse_app", isolated_host=True) as ns:
+    # The host endpoint is a sandbox too: run the server where host_ip lives.
+    server = await ns.host.start_process(["python3", "echo_server.py", "10.0.1.1", "9999"])
+    await server.wait_for_output(b"bound", timeout=10)
+
+    # Capture on the host end, in its namespace.
+    asserter = PCAPAsserter(iface=ns.ext_iface, netns=ns.ext_netns)
+    await asserter.start()
+    result = await ns.run_process(["python3", "client.py", "10.0.1.1", "9999"], timeout=5)
+    report = await asserter.stop_report()
+```
+
+- `ns.ext_netns` is the namespace holding `ext_iface`: `None` by default,
+  `nsh_<name>` when isolated.
+- `ns.host` is the host end as a sandbox. It has the same `exec_argv()`,
+  `start_process()`, `run_process()` and `inject_packet()`. Its `ext_iface` is
+  the sandbox's `peer_iface`, and the reverse, so `ns.host.inject_packet()` sends
+  from the sandbox towards the host end.
+- `ns.inject_packet()` sends from inside `nsh_<name>`.
+- No host route is involved, so `host_ip` may overlap a subnet the host already
+  routes. The preflight check for overlapping routes is skipped.
+- Processes on both ends are stopped when the block exits.
+
 ---
 
 ## Asserting that nothing left the interface
@@ -314,6 +358,12 @@ await asserter.start()  # returns once the kernel socket is filtering and bound
 leaked = await asserter.stop()
 assert not leaked, f"{len(leaked)} frame(s) escaped: {leaked}"
 ```
+
+The interface is looked up in the namespace NSE runs in. For one in another
+namespace, pass `netns=`, for example
+`PCAPAsserter(iface=ns.ext_iface, netns=ns.ext_netns)`. Only the capture thread
+enters that namespace; the rest of the process stays where it is, and the report
+records it in `netns`.
 
 ### Readiness and failures
 

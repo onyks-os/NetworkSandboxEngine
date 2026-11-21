@@ -13,6 +13,7 @@ The pipeline derives names from its test ID:
 | Simple namespace | `nse_<test_id>` | `nse_a1b2c3d4e5f6` |
 | Router namespace | `nsr_<test_id>` | `nsr_a1b2c3d4e5f6` |
 | Server namespace | `nss_<test_id>` | `nss_a1b2c3d4e5f6` |
+| Isolated host endpoint (`create_namespace(..., isolated_host=True)`) | `nsh_<name>` | `nsh_nse_app` |
 | Host veth | `vhr-<suffix>` | `vhr-3f9a0c41b2e` |
 | Peer veth (simple netns) / router host veth | `vrh-<suffix>` | `vrh-3f9a0c41b2e` |
 | Router server veth | `vrs-<suffix>` | `vrs-3f9a0c41b2e` |
@@ -43,7 +44,11 @@ server subnets and recorded as owned resources; pre-existing routes are never
 replaced or removed.
 
 `create_namespace(name)` continues to expose its interface names through
-`sandbox.ext_iface` and `sandbox.peer_iface`. Neither these conventions nor
+`sandbox.ext_iface` and `sandbox.peer_iface`. With `isolated_host=True` the host
+end lives in `nsh_<name>` (`sandbox.ext_netns`) instead of the host namespace. It
+is reserved, recorded and removed together with the sandbox, and the route
+overlap check does not apply to it; see
+[the host endpoint](../how-to/in-process-integration.md#the-host-endpoint-and-the-hosts-firewall). Neither these conventions nor
 prefixes authorize deletion. Network address/name conflicts between otherwise
 independent topologies still need compatible configuration.
 

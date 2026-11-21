@@ -399,6 +399,101 @@ async def test_create_namespace_lifecycle_mocked(
     controller._cleanup_run.assert_called_once()
 
 
+@patch("nse.core.netns_controller.warn_if_filtered")
+@patch("nse.core.netns_controller._run")
+@pytest.mark.asyncio
+async def test_isolated_host_keeps_every_command_out_of_nses_namespace(
+    mock_run: MagicMock, warn: MagicMock, resource_kernel: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nse.core.resource_network import NetworkResources, RouteInfo
+
+    # A host route over the sandbox subnet: irrelevant once the endpoint is isolated.
+    monkeypatch.setattr(
+        NetworkResources, "routes", lambda self, v: [RouteInfo(dst="10.0.1.0/24", dev="eth0")]
+    )
+    controller = NetnsController(use_nsenter=False)
+    controller.create_netns = MagicMock()
+    controller._create_owned_pair = MagicMock()
+    controller._cleanup_run = MagicMock()
+    in_host = [resolve("ip"), "netns", "exec", "nsh_iso"]
+    in_sandbox = [resolve("ip"), "netns", "exec", "iso"]
+
+    async with controller.create_namespace("iso", isolated_host=True) as ns:
+        assert ns.ext_netns == "nsh_iso"
+        assert ns.host is not None
+        assert (ns.host.name, ns.host.ext_netns) == ("nsh_iso", "iso")
+        assert (ns.host.ext_iface, ns.host.peer_iface) == (ns.peer_iface, ns.ext_iface)
+        assert (ns._source_v4, ns.host._source_v4) == ("10.0.1.1", "10.0.1.2")
+
+    assert [c.args[0] for c in controller.create_netns.call_args_list] == ["iso", "nsh_iso"]
+    controller._create_owned_pair.assert_called_once_with(
+        ns.ext_iface, ns.peer_iface, "iso", "nsh_iso"
+    )
+    commands = [c.args[0] for c in mock_run.call_args_list]
+    assert all(cmd[:4] in (in_host, in_sandbox) for cmd in commands), commands
+    assert [*in_host, resolve("ip"), "link", "set", ns.peer_iface, "netns", "iso"] in commands
+    assert [*in_host, resolve("ip"), "addr", "add", "10.0.1.1/24", "dev", ns.ext_iface] in commands
+    assert [*in_host, resolve("ip"), "link", "set", "lo", "up"] in commands
+    assert [*in_sandbox, resolve("ip"), "addr", "add", "10.0.1.2/24", "dev", ns.peer_iface] in (
+        commands
+    )
+    warn.assert_not_called()
+    controller._cleanup_run.assert_called_once()
+
+
+@patch("nse.core.netns_controller.warn_if_filtered")
+@pytest.mark.asyncio
+async def test_the_default_topology_checks_the_host_firewall(
+    warn: MagicMock, resource_kernel: None
+) -> None:
+    controller = NetnsController()
+    controller.create_veth_pair = MagicMock()
+    controller.create_netns = MagicMock()
+    controller._cleanup_run = MagicMock()
+
+    async with controller.create_namespace("plain") as ns:
+        assert ns.ext_netns is None
+        assert ns.host is None
+
+    warn.assert_called_once_with("plain", ["10.0.1.1/24", "fd00::1/64"])
+
+
+@pytest.mark.asyncio
+async def test_isolated_host_stops_processes_on_both_ends(resource_kernel: None) -> None:
+    controller = NetnsController()
+    controller.create_netns = MagicMock()
+    controller._configure_pair = MagicMock()
+    controller._cleanup_run = MagicMock()
+    stopped: list[str] = []
+
+    async def stop(self: object) -> None:
+        stopped.append(self.name)  # type: ignore[attr-defined]
+
+    with patch("nse.core.netns_controller.NamespaceSandbox._stop_processes", stop):
+        async with controller.create_namespace("both", isolated_host=True):
+            pass
+    assert sorted(stopped) == ["both", "nsh_both"]
+
+
+@patch("nse.core.netns_controller._run")
+@pytest.mark.asyncio
+async def test_the_default_topology_still_refuses_a_host_route_conflict(
+    mock_run: MagicMock, resource_kernel: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nse.core.resource_network import NetworkResources, RouteInfo
+    from nse.core.resource_registry import OwnershipError
+
+    monkeypatch.setattr(
+        NetworkResources, "routes", lambda self, v: [RouteInfo(dst="10.0.1.0/24", dev="eth0")]
+    )
+    controller = NetnsController()
+    controller.create_netns = MagicMock()
+    with pytest.raises(OwnershipError, match="conflicts with host route"):
+        async with controller.create_namespace("clash"):
+            pass
+    controller.create_netns.assert_not_called()
+
+
 # PCAPAsserter unit tests live in tests/test_sniffer.py.
 
 
