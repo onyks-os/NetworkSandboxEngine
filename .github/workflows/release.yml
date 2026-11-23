@@ -192,20 +192,22 @@ jobs:
           python-version: "3.12"
 
       # The index takes a little while to serve a freshly uploaded file, so poll
-      # rather than sleeping for a guessed interval.
+      # rather than sleeping for a guessed interval. --no-cache-dir: otherwise pip
+      # keeps re-reading the index page it cached on the first attempt, and the
+      # new version never appears (v2.5.0 gave up after 5 minutes this way).
       - name: Install the published version from TestPyPI
         run: |
           version="${GITHUB_REF_NAME#v}"
           echo "Waiting for network-sandbox-engine==$version to appear on TestPyPI..."
-          for attempt in $(seq 1 20); do
-            if pip install \
+          for attempt in $(seq 1 40); do
+            if pip install --no-cache-dir \
                  --index-url https://test.pypi.org/simple/ \
                  --extra-index-url https://pypi.org/simple/ \
                  "network-sandbox-engine[cli]==$version"; then
               echo "Installed on attempt $attempt."
               exit 0
             fi
-            echo "Not available yet (attempt $attempt/20), retrying in 15s..."
+            echo "Not available yet (attempt $attempt/40), retrying in 15s..."
             sleep 15
           done
           echo "::error::network-sandbox-engine==$version never became installable from TestPyPI"
