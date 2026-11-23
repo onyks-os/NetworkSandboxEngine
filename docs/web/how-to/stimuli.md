@@ -130,6 +130,19 @@ rather than "a packet like it went by".
 
 ---
 
+## Requirements: `setpriv`
+
+A stimulus with an `identity` is launched through `setpriv`, from util-linux.
+Like every binary NSE runs as root, it is looked up only in trusted system
+directories, never in `$PATH`. Minimal images may not have it: Fedora's
+`util-linux-core` has `nsenter` but not `setpriv`. Install `util-linux`.
+
+Without it, every stimulus run as another identity is `could_not_run` at
+`launch`, with the reason naming the package, and `StimulusStream.start()`
+raises `StreamStartError`. A stimulus without an identity does not need it.
+
+---
+
 ## The interpreter
 
 The programs need only the Python standard library. By default they run with

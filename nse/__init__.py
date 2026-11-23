@@ -9,12 +9,14 @@ from importlib.metadata import version as _version
 from .core.netns_controller import NetnsController
 from .core.process import IdentityError, ManagedProcess, ProcessExitedError, ProcessStartError
 from .core.sniffer import CaptureError, CaptureStartError, CaptureStateError, PCAPAsserter
-from .models.capture_report import CaptureLimits, CaptureReport
+from .models.capture_report import Beacon, BeaconSighting, CaptureLimits, CaptureReport
 from .models.experiment_report import ExperimentReport, PositiveControl
 from .models.process import EffectiveIdentity, ProcessIdentity, ProcessResult
 from .models.stimulus import Endpoint, Receipt, ReceiptLog, StimulusResult
+from .models.stream import Correlation, Fate, Gap, StreamAttempt, StreamLog
 from .receivers import Receiver, ReceiverSpec, ReceiverStartError
-from .stimuli import Observation, Stimulus, observe
+from .stimuli import Observation, Stimulus, Window, observe, observe_window
+from .streams import RunningStream, StimulusStream, StreamStartError, correlate
 
 try:
     # Read the version from installed metadata rather than restating it here.
@@ -25,14 +27,19 @@ except PackageNotFoundError:  # pragma: no cover - running from a bare checkout
     __version__ = "0.0.0.dev0"
 
 __all__ = [
+    "Beacon",
+    "BeaconSighting",
     "CaptureError",
     "CaptureLimits",
     "CaptureReport",
     "CaptureStartError",
     "CaptureStateError",
+    "Correlation",
     "EffectiveIdentity",
     "Endpoint",
     "ExperimentReport",
+    "Fate",
+    "Gap",
     "IdentityError",
     "ManagedProcess",
     "NetnsController",
@@ -48,8 +55,16 @@ __all__ = [
     "Receiver",
     "ReceiverSpec",
     "ReceiverStartError",
+    "RunningStream",
     "Stimulus",
     "StimulusResult",
+    "StimulusStream",
+    "StreamAttempt",
+    "StreamLog",
+    "StreamStartError",
+    "Window",
     "__version__",
+    "correlate",
     "observe",
+    "observe_window",
 ]

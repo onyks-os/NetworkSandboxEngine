@@ -220,3 +220,65 @@ def test_icmp_echo_and_reply_are_found_by_probe(family: int) -> None:
     packets = [request, reply, foreign, error]
     assert probe_packets.request_packets(result, packets) == [request]
     assert probe_packets.reply_packets(result, packets) == [reply]
+
+
+# --------------------------------------------------------------------------- NAT
+
+
+def _nat_result(transport: str, source: tuple[str, int] | None, **fields: Any) -> Any:
+    from nse.models.stimulus import Endpoint, StimulusResult
+
+    probe = "abcdefabcdefabcdefabcdef"
+    base: dict[str, Any] = {
+        "kind": {"udp": "udp", "tcp": "tcp_connect", "icmp": "icmp_echo"}[transport],
+        "transport": transport,
+        "family": 4,
+        "probe_id": probe,
+        "destination": Endpoint(address="10.0.1.1", port=0 if transport == "icmp" else 53),
+        "source": None if source is None else Endpoint(address=source[0], port=source[1]),
+        "payload": probe_packets.marker(probe),
+        "outcome": "sent",
+    }
+    base.update(fields)
+    return StimulusResult(**base)
+
+
+def test_nat_matches_a_rewritten_bare_syn_by_its_bound_port() -> None:
+    from scapy.layers.inet import IP, TCP
+
+    result = _nat_result("tcp", ("10.0.1.2", 41000), payload=b"")
+    syn = IP(src="10.0.1.2", dst="192.0.2.9") / TCP(sport=41000, dport=5353, flags="S")
+    synack = IP(src="192.0.2.9", dst="10.0.1.2") / TCP(sport=5353, dport=41000, flags="SA")
+    other = IP(src="10.0.1.2", dst="192.0.2.9") / TCP(sport=41001, dport=5353, flags="S")
+    packets = [syn, synack, other]
+    assert probe_packets.request_packets(result, packets) == []
+    assert probe_packets.request_packets(result, packets, nat=True) == [syn]
+    assert probe_packets.reply_packets(result, packets, nat=True) == [synack]
+
+
+def test_nat_with_an_unspecified_or_unknown_source() -> None:
+    from scapy.layers.inet import IP, UDP
+    from scapy.packet import Raw
+
+    marker = probe_packets.marker("abcdefabcdefabcdefabcdef")
+    out = IP(src="10.0.1.2", dst="192.0.2.9") / UDP(sport=40000, dport=5353) / Raw(marker)
+    back = IP(src="192.0.2.9", dst="10.0.1.2") / UDP(sport=5353, dport=40000) / Raw(marker)
+    wildcard = _nat_result("udp", ("0.0.0.0", 40000))
+    assert probe_packets.request_packets(wildcard, [out, back], nat=True) == [out]
+    assert probe_packets.reply_packets(wildcard, [out, back], nat=True) == [back]
+    unknown = _nat_result("udp", None)  # no source: only the probe ID identifies it
+    assert probe_packets.request_packets(unknown, [out, back], nat=True) == [out, back]
+
+
+def test_nat_icmp_still_tells_requests_from_replies_by_type() -> None:
+    from scapy.layers.inet import ICMP, IP
+    from scapy.packet import Raw
+
+    probe = "abcdefabcdefabcdefabcdef"
+    result = _nat_result("icmp", ("10.0.1.2", 0))
+    request = IP(
+        bytes(IP(src="10.0.1.2", dst="192.0.2.9", proto=1) / Raw(probe_packets.icmp_echo(probe, 4)))
+    )
+    reply = IP(src="192.0.2.9", dst="10.0.1.2") / ICMP(type=0) / Raw(probe_packets.marker(probe))
+    assert probe_packets.request_packets(result, [request, reply], nat=True) == [request]
+    assert probe_packets.reply_packets(result, [request, reply], nat=True) == [reply]

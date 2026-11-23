@@ -53,6 +53,20 @@ TRUSTED_DIRS: tuple[str, ...] = (
     "/usr/local/bin",
 )
 
+#: The package that provides each binary NSE runs, named in the error when one is
+#: missing. Minimal images are where this bites: Fedora's ``util-linux-core``,
+#: for one, has ``nsenter`` but not ``setpriv``.
+PACKAGES: dict[str, str] = {
+    "ip": "iproute2 (iproute on Fedora)",
+    "nft": "nftables",
+    "nsenter": "util-linux",
+    "setpriv": (
+        "util-linux (needed to run a process as another identity; Fedora's "
+        "util-linux-core does not include it)"
+    ),
+    "sysctl": "procps (procps-ng on Fedora)",
+}
+
 
 class BinaryNotFoundError(FileNotFoundError):
     """
@@ -125,9 +139,11 @@ def resolve(binary: str) -> str:
             )
         return str(candidate)
 
+    package = PACKAGES.get(binary)
     raise BinaryNotFoundError(
         f"Required binary '{binary}' was not found in any trusted directory. "
-        f"Searched: {', '.join(searched)}. "
+        + (f"Install {package}. " if package else "")
+        + f"Searched: {', '.join(searched)}. "
         f"NSE deliberately does not consult $PATH, because a caller-controlled "
         f"PATH would let an attacker choose which program runs as root."
     )

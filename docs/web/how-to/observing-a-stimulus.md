@@ -85,22 +85,69 @@ A refused `connect` or `receive` with the packet on the wire is not a
 contradiction: a TCP RST or an ICMP error follows a packet that did leave.
 
 A capture on the wrong interface is still a complete window that saw nothing,
-so on its own it reports `on_wire=False`. A receiver, or a control stimulus you
-know must be seen, is what exposes it. NSE's own tests run exactly that case
-with a filter that excludes the probe.
+so on its own it reports `on_wire=False`. A receiver, or a canary that must be
+seen (below), is what exposes it. NSE's own tests run exactly that case with a
+filter that excludes the probe.
 
 ---
 
-## Several stimuli in one capture
+## A canary in the same window
 
-`observe()` runs one stimulus per capture. When one window must hold several,
-for instance the probe and then a control that proves the window was still open
-after it, drive the capture yourself and find each result's packets with
+A positive control in its own capture proves the instrument worked a moment
+ago, not that it was still working during the stimulus. Pass `canary=`: a
+stimulus the rules under test let through, sent **after** the stimulus inside
+the **same** capture window.
+
+```python
+seen = await stimuli.observe(
+    ns,
+    stimuli.tcp_connect("10.0.1.1", 8080),
+    identity=nobody,
+    canary=stimuli.udp("10.0.1.1", 7777),
+    canary_identity=allowed,          # default: the stimulus's identity
+)
+assert seen.canary.on_wire is True, seen.describe()
+assert seen.on_wire is False, seen.describe()
+```
+
+Unless the canary was seen on the wire, no absence is `False`: `on_wire`,
+`reply_on_wire` and the other unseen facts become `None`, and `describe()`
+says `canary: NOT seen`. A capture that stopped reading, or never watched the
+traffic's link, cannot vouch for a silence it did not observe. The
+[beacons](beacons.md) prove the same thing at the link level, and the two
+combine.
+
+---
+
+## Several stimuli in one window
+
+`observe_window()` runs several stimuli in order, then the optional canary,
+inside one capture, and gives each stimulus its own `Observation`:
+
+```python
+window = await stimuli.observe_window(
+    ns,
+    [stimuli.udp("192.0.2.53", 53), stimuli.tcp_connect("192.0.2.80", 80)],
+    identity=nobody,
+    canary=stimuli.udp("10.0.1.1", 7777),
+    canary_identity=allowed,
+)
+assert window.conclusive, window.describe()   # healthy, complete, canary seen, no contradiction
+dns, web = window                              # one Observation per stimulus, in order
+assert dns.on_wire is False
+assert web.on_wire is False
+```
+
+`window.vouched` is the capture's part (healthy, complete, canary seen),
+`window.contradictions()` gathers every observation's contradictions, and
+`window.packets` holds the whole capture. Each stimulus is matched by its own
+probe ID (or, for a bare SYN, its source port), so neither the canary nor
+another stimulus can stand in for it.
+
+To drive the capture yourself instead, find each result's packets with
 `requests_in()` and `replies_in()`:
 
 ```python
-from nse import PCAPAsserter, stimuli
-
 asserter = PCAPAsserter(iface=ns.ext_iface, netns=ns.ext_netns)
 await asserter.start()
 probe = await stimuli.udp("192.0.2.53", 53).run(ns, identity=nobody)
@@ -113,5 +160,28 @@ assert stimuli.requests_in(control, packets), "the window was not open after the
 assert not stimuli.requests_in(probe, packets), "the probe left"
 ```
 
-Each result is matched by its own probe ID (or, for a bare SYN, its source
-port), so the control never stands in for the probe or the other way round.
+---
+
+## After a NAT
+
+By default a request must go to the stimulus's own destination address and
+port. A DNAT or a redirect rewrites both, so the probe is no longer recognised.
+With a receiver at the new destination this shows up as a contradiction:
+received, but not on the wire.
+
+Pass `nat=True` to `observe()`, `observe_window()`, `requests_in()`,
+`replies_in()` or `correlate()`. The destination is then not compared: a
+request counts wherever it goes, as long as it leaves from the probe's own
+source and carries its probe ID (or, for a bare SYN, leaves from its bound
+port). A reply counts from whatever source answered, as long as it is addressed
+to the probe. Read where the probe really went from the packets:
+
+```python
+seen = await stimuli.observe(ns, stimuli.udp_round_trip("10.0.1.1", 5353), identity=nobody,
+                             receiver=echo_on_9999, nat=True)
+assert seen.on_wire is True
+assert {pkt[UDP].dport for pkt in seen.requests} == {9999}   # redirected
+```
+
+A NAT that rewrites the *source* port of a bare SYN still hides it, since that
+port is the SYN's only identity.

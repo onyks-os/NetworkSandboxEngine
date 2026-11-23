@@ -32,6 +32,19 @@ table inet nse_trace {
 }
 """
 
+#: Added with ``RuleEngine(trace_output=True)``. A locally generated packet
+#: never crosses prerouting, so without this chain no rule it meets is traced.
+#: Priority -350 sets the flag before raw (-300), mangle (-150), DNAT (-100)
+#: and filter (0) chains see the packet.
+_TRACE_OUTPUT_RULESET = """
+table inet nse_trace {
+  chain nse_trace_output {
+    type filter hook output priority -350; policy accept;
+    meta nftrace set 1
+  }
+}
+"""
+
 
 @dataclass
 class NftError:
@@ -54,8 +67,12 @@ class RuleEngine:
     Validates and loads nftables rules into a network namespace.
     """
 
-    def __init__(self, use_nsenter: bool = False) -> None:
+    def __init__(self, use_nsenter: bool = False, *, trace_output: bool = False) -> None:
+        """*trace_output* also traces locally generated traffic (an ``output`` hook
+        chain in ``nse_trace``), so the rules a process's own packets meet appear
+        in ``nft monitor trace``; by default only arriving traffic is traced."""
         self.use_nsenter = use_nsenter
+        self.trace_output = trace_output
 
     def exec_prefix(self, name: str) -> list[str]:
         if self.use_nsenter:
@@ -89,7 +106,8 @@ class RuleEngine:
 
         logger.info("Loading rules into netns %s", netns_name)
 
-        full_ruleset = f"{_TRACE_INIT_RULESET}\n{rules}"
+        trace = _TRACE_INIT_RULESET + (_TRACE_OUTPUT_RULESET if self.trace_output else "")
+        full_ruleset = f"{trace}\n{rules}"
 
         with _temp_rules_file(full_ruleset) as path:
             cmd = [*self.exec_prefix(netns_name), resolve("nft"), "-f", path]

@@ -10,6 +10,92 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Thi
 
 ---
 
+## [2.5.0] - 2026-11-23
+
+Traffic through a window of time, and captures that prove they saw it. A rule
+reload or a restart is not an instant: the question is what happened to the
+traffic throughout it. NSE now sends a numbered stimulus at a fixed rate,
+says what became of every attempt, and calls a window inconclusive whenever
+the stream paused, the capture cannot prove it was reading, or a log is
+incomplete. Observations gain a canary in the same window and NAT-aware
+matching, and the trace oracle can follow traffic a process generates.
+Everything is opt-in; code written against 2.4.0 keeps working unchanged.
+
+### Added
+
+- **`nse.streams.StimulusStream(stimulus, period, count=None, duration=None,
+  max_in_flight=256)`**: one program inside the sandbox sends the stimulus once
+  per period, each attempt in its own thread, with a sequence number and its
+  own probe ID (a bare-SYN stream binds consecutive source ports). `await
+  stream.start(sandbox, identity=...)` returns a `RunningStream` with `log()`,
+  `stop()` and `wait()`; slots that cannot be used are skipped, never made up
+  with a burst. `StreamStartError` when it does not start.
+- **`correlate(log, packets, receipts=None, *, capture=None,
+  max_gap_periods=3.0)`** gives each sequence number a `Fate`: `not_sent`,
+  `refused`, `sent_not_seen`, `on_wire` or `received`, with the facts it rests
+  on as `True`, `False` or `None`. The `Correlation` is not `conclusive` when
+  no attempt that could run started for more than `max_gap_periods` periods,
+  when the stream's log, the capture or the receiver's log is incomplete, when
+  nothing was tested, or when the instruments contradict each other.
+  `between(start, end)` slices it and adds gaps at the edges.
+- **Window beacons**: `await asserter.mark(label)` (optionally `via=sandbox`)
+  and `await sandbox.beacon(label)` with `asserter.expect(beacon)` send an
+  Ethernet frame with EtherType `0x88B5` at a known moment. A `CaptureReport`
+  with an expected beacon missing is not `window_complete`. Beacons are written
+  to the PCAP file but never returned by `stop()`. `mark()` refuses on a
+  custom filter unless `PCAPAsserter(..., beacons=True)`, and on a link without
+  an Ethernet header.
+- **`CaptureReport`** gains `hardware_type`, `link_type`, `snaplen`,
+  `packets_truncated`, `required_bytes` (from `PCAPAsserter(required_bytes=...)`)
+  and `snaplen_sufficient`, plus `beacons_expected`, `beacons_seen` and
+  `beacons_missing`. A declared `required_bytes` larger than the snaplen makes
+  the window incomplete.
+- **A canary in the same window**: `observe(..., canary=stimulus,
+  canary_identity=...)` sends the canary after the stimulus inside the same
+  capture. Unless the canary was seen on the wire, no absence is `False`.
+  `Observation.canary` holds the canary's own observation.
+- **`observe_window(sandbox, stimuli, ...)`** runs several stimuli and an
+  optional canary in one capture and returns a `Window` with one `Observation`
+  per stimulus, `vouched`, `conclusive`, `contradictions()` and `describe()`.
+- **NAT-aware matching**: `nat=True` on `observe()`, `observe_window()`,
+  `requests_in()`, `replies_in()` and `correlate()` recognises a probe after a
+  DNAT or redirect rewrote its destination: by probe ID (or a bare SYN's
+  source port) and the probe's own source, wherever it went.
+- **Tracing locally generated traffic**: `RuleEngine(trace_output=True)` adds an
+  `output`-hook trace chain at priority -350, so packets a process sends from
+  inside the namespace are traced. `TraceHarvester.prove_ready(send,
+  predicate)` and `stimuli.trace_ready(harvester, sandbox, canary)` send a
+  canary until its own trace comes back and return a `TraceReadiness`;
+  `without(events)` removes the canary's traces. Without the output chain a
+  local canary is never traced, and readiness is `False`.
+- The new names are exported from `nse`: `StimulusStream`, `RunningStream`,
+  `StreamStartError`, `StreamAttempt`, `StreamLog`, `Correlation`, `Fate`,
+  `Gap`, `correlate`, `Beacon`, `BeaconSighting`, `Window` and
+  `observe_window`.
+- Documentation: [streams](https://onyks-os.github.io/nse/how-to/streams/),
+  [beacons](https://onyks-os.github.io/nse/how-to/beacons/),
+  [tracing a process's own traffic](https://onyks-os.github.io/nse/how-to/tracing-local-traffic/),
+  and [observing a stimulus](https://onyks-os.github.io/nse/how-to/observing-a-stimulus/)
+  for canaries, windows and NAT.
+
+### Fixed
+
+- A missing `setpriv` (util-linux) made `Stimulus.run(..., identity=...)` raise
+  `BinaryNotFoundError` instead of returning `could_not_run`, as its contract
+  says. It is now `could_not_run` at `launch`. The error for any missing binary
+  NSE runs now names the package that provides it, for instance util-linux for
+  `setpriv`, which Fedora's minimal `util-linux-core` lacks. The dependency is
+  documented in the requirements and the stimuli guide.
+
+### Notes
+
+- Each feature has a test in which a deliberately blind setup fails visibly:
+  a filter that drops a beacon, a beacon on a link the capture does not watch,
+  a frozen stream, a stream that cannot run, a strict match after a DNAT, a
+  capture that cannot see its canary, and a trace without an output chain.
+
+---
+
 ## [2.4.0] - 2026-11-23
 
 Stimuli from a real user, controlled receivers, and observations that keep

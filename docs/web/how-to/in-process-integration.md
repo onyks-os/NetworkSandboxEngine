@@ -258,7 +258,8 @@ is exactly the set the process keeps (effective, permitted, ambient and
 bounding); it also works for root, for example to run root with `net_raw` only.
 
 NSE enters the namespace with its own privileges and applies the identity
-afterwards with `setpriv`. Before the program starts, it reads the identity the
+afterwards with `setpriv` (util-linux; minimal images such as Fedora's
+`util-linux-core` lack it, and the error then names the package). Before the program starts, it reads the identity the
 kernel reports for that very process (same PID) and compares it with the
 request:
 
@@ -413,6 +414,11 @@ nothing remained unread. When the counters are unavailable this is `None`, not
 `True`. **Evidence sufficiency** is not in the report at all. A healthy, complete
 capture of an empty interface still does not prove that your stimulus took that
 path, which is why the positive control below is still required.
+
+[Beacons](beacons.md) close part of that gap: `await asserter.mark("label")`
+sends a frame the capture must see, and a missing one makes the window
+incomplete. The report also gives the link type, the snaplen and, with
+`PCAPAsserter(required_bytes=...)`, whether the snaplen is sufficient.
 
 ### Long captures with bounded memory
 

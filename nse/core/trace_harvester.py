@@ -44,7 +44,8 @@ import logging
 import os
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable, Iterable
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, TypedDict
 
 from nse.core.paths import resolve
@@ -122,6 +123,37 @@ _VERDICT_RE = re.compile(_PREFIX + r"(?:verdict|policy) (?P<verdict>\w+)")
 _TRACE_LINE_RE = re.compile(r"^trace id \S+ ")
 
 
+@dataclass(frozen=True)
+class TraceReadiness:
+    """Whether a canary's trace came back through the monitor, proving it is subscribed.
+
+    ``trace_ids`` are the canary's traces seen so far; :meth:`without` drops
+    every trace that touched the canary (by *predicate*), including ones whose
+    lines arrived after readiness was decided. Use it before reading what the
+    subject stimulus did.
+    """
+
+    ready: bool
+    attempts: int
+    trace_ids: frozenset[str]
+    problems: tuple[str, ...] = ()
+    predicate: Callable[[TraceEvent], bool] | None = field(default=None, repr=False)
+
+    def without(self, events: Iterable[TraceEvent]) -> list[TraceEvent]:
+        events = list(events)
+        canary = set(self.trace_ids)
+        if self.predicate is not None:
+            canary |= {e.trace_id for e in events if e.trace_id and self.predicate(e)}
+        return [e for e in events if e.trace_id is None or e.trace_id not in canary]
+
+    def describe(self) -> str:
+        if self.ready:
+            return f"trace monitor ready after {self.attempts} canary attempt(s)"
+        return f"trace monitor NOT proven ready after {self.attempts} canary attempt(s): " + (
+            "; ".join(self.problems) or "no canary trace came back"
+        )
+
+
 class TraceHarvester:
     """
     Async subprocess wrapper for `nft monitor trace`.
@@ -191,6 +223,51 @@ class TraceHarvester:
             return True
         except asyncio.TimeoutError:
             return False
+
+    async def prove_ready(
+        self,
+        send: Callable[[], Awaitable[str | None]],
+        predicate: Callable[[TraceEvent], bool] | None = None,
+        *,
+        attempts: int = 5,
+        timeout: float = 1.0,
+    ) -> TraceReadiness:
+        """Send a canary until its trace comes back, at most *attempts* times.
+
+        *send* emits one canary packet in the traced namespace and returns
+        ``None``, or a reason it could not send one. *predicate* recognises the
+        canary's trace events (default: any event). Ready means the kernel
+        delivered a trace event through the monitor after the canary was sent,
+        which :meth:`wait_ready` alone cannot show. Arms the event signal with
+        *predicate*; arm it again before waiting for anything else.
+        """
+        if attempts < 1:
+            raise ValueError("attempts must be at least 1")
+        self.arm_event_signal(predicate)
+        problems: list[str] = []
+        made = 0
+        for made in range(1, attempts + 1):
+            self.extend_deadline(timeout + 10.0)
+            reason = await send()
+            if reason is not None:
+                problems.append(f"attempt {made}: the canary was not sent: {reason}")
+                continue
+            if await self.wait_for_event(timeout=timeout):
+                return TraceReadiness(
+                    ready=True,
+                    attempts=made,
+                    trace_ids=frozenset(self.matched_trace_ids),
+                    problems=tuple(problems),
+                    predicate=predicate,
+                )
+        problems += self.health_errors() if self.state is not HarvestState.RUNNING else []
+        return TraceReadiness(
+            ready=False,
+            attempts=made,
+            trace_ids=frozenset(self.matched_trace_ids),
+            problems=tuple(problems),
+            predicate=predicate,
+        )
 
     def arm_event_signal(self, predicate: Callable[[TraceEvent], bool] | None = None) -> None:
         """Clear the event signal so the next :meth:`wait_for_event` waits for a *new* event."""

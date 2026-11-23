@@ -12,6 +12,7 @@ NSE requires a Linux environment with kernel netns support and standard network 
 - **Python** 3.10+
 - **nftables** (`nft`)
 - **iproute2** (`ip`)
+- **util-linux** (`nsenter`, and `setpriv` to run a process as another identity)
 - **Root privileges** (required for `ip netns` and kernel trace operations)
 
 ---

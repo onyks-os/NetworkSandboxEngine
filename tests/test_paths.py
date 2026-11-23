@@ -91,6 +91,21 @@ def test_a_missing_binary_raises_and_says_where_it_looked() -> None:
     # The message has to explain *why* it did not fall back to PATH, or the next
     # maintainer will "fix" it by adding one.
     assert "$PATH" in message
+    assert "Install" not in message  # no package to suggest for an unknown name
+
+
+def test_a_missing_known_binary_names_its_package(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from nse.core import paths
+
+    paths.clear_cache()
+    monkeypatch.setattr(paths, "TRUSTED_DIRS", (str(tmp_path),))
+    try:
+        with pytest.raises(BinaryNotFoundError, match=r"Install util-linux \(needed to run"):
+            resolve("setpriv")
+    finally:
+        paths.clear_cache()
 
 
 def test_a_path_argument_is_rejected() -> None:

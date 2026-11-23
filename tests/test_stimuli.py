@@ -388,3 +388,30 @@ def test_with_reply_changes_only_the_wait() -> None:
 def test_the_default_interpreter_is_this_one_resolved() -> None:
     assert os.path.samefile(stimuli.default_python(), sys.executable)
     assert not os.path.islink(stimuli.default_python())
+
+
+@pytest.fixture
+def without_setpriv(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> Any:
+    """A minimal image: no trusted directory holds setpriv (or anything else)."""
+    from nse.core import paths
+
+    paths.clear_cache()
+    monkeypatch.setattr(paths, "TRUSTED_DIRS", (str(tmp_path),))
+    yield
+    paths.clear_cache()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("without_setpriv")
+async def test_a_missing_setpriv_could_not_run_and_names_the_package(local_sandbox: Any) -> None:
+    import os
+
+    from nse.models.process import ProcessIdentity
+
+    result = await stimuli.udp("127.0.0.1", 9).run(
+        local_sandbox, identity=ProcessIdentity(uid=os.getuid(), gid=os.getgid())
+    )
+    assert result.outcome == "could_not_run"
+    assert result.stage == "launch"
+    assert "setpriv" in (result.reason or "")
+    assert "Install util-linux" in (result.reason or "")

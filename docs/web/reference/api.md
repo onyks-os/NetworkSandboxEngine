@@ -81,6 +81,35 @@ keeps sent, on the wire, received and reply seen apart. See
 
 ---
 
+## Streams
+
+A stimulus sent at a fixed rate, and `correlate()`, which says what became of
+each attempt. See [streams](../how-to/streams.md).
+
+::: nse.streams
+    options:
+      show_root_heading: true
+      show_source: true
+
+::: nse.models.stream
+    options:
+      show_root_heading: true
+      show_source: true
+
+---
+
+## Capture Beacons
+
+Non-IP frames that prove a capture was reading across a window. See
+[beacons](../how-to/beacons.md).
+
+::: nse.core.beacons
+    options:
+      show_root_heading: true
+      show_source: true
+
+---
+
 ## Controlled Receivers
 
 See [controlled receivers](../how-to/receivers.md).
@@ -102,6 +131,10 @@ See [controlled receivers](../how-to/receivers.md).
 ---
 
 ## Trace Harvester
+
+`TraceHarvester.prove_ready()` and `TraceReadiness` prove the monitor is
+attached with a canary. See
+[tracing a process's own traffic](../how-to/tracing-local-traffic.md).
 
 ::: nse.core.trace_harvester
     options:

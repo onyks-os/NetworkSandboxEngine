@@ -100,6 +100,37 @@ class CaptureLimits(BaseModel):
     )
 
 
+class Beacon(BaseModel):
+    """A beacon frame that was sent: a marker the capture is expected to see.
+
+    A beacon is a non-IP Ethernet frame (EtherType 0x88B5, IEEE 802 local
+    experimental) carrying a random token and a label. No firewall rule for IP
+    traffic touches it, so seeing it proves only that the capture was reading
+    that link at that moment. Two beacons around a window, both seen, prove the
+    capture was open for all of it.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    label: str
+    token: str = Field(description="32 hex digits, unique to this beacon.")
+    iface: str = Field(description="Interface the frame was sent from.")
+    netns: str | None = Field(description="Namespace of that interface; None for NSE's own.")
+    sent_at: float = Field(description="Unix time the frame was sent.")
+    sent_monotonic: float = Field(description="time.monotonic() when the frame was sent.")
+
+
+class BeaconSighting(BaseModel):
+    """A beacon frame the capture read."""
+
+    model_config = ConfigDict(frozen=True)
+
+    label: str
+    token: str
+    seen_at: float = Field(description="Unix time the capture read it.")
+    index: int = Field(description="How many frames the capture had read before it.")
+
+
 class CaptureReport(BaseModel):
     """Result of one capture session, produced once and shared by stop()/stop_report()."""
 
@@ -184,6 +215,48 @@ class CaptureReport(BaseModel):
         default=None, description="Why kernel_packets/kernel_drops are None."
     )
 
+    hardware_type: int | None = Field(
+        default=None, description="Linux ARPHRD_* type of the interface; None if never opened."
+    )
+    link_type: int | None = Field(
+        default=None,
+        description="PCAP LINKTYPE_* of the frames read (1: Ethernet, 101: raw IP); None "
+        "when the hardware type has no known mapping.",
+    )
+    snaplen: int | None = Field(
+        default=None, description="Most bytes of one frame the capture reads; None if never opened."
+    )
+    required_bytes: int | None = Field(
+        default=None,
+        description="Bytes of each frame the caller said it needs (PCAPAsserter(required_bytes=)).",
+    )
+    packets_truncated: int = Field(
+        default=0, description="Frames read at exactly snaplen bytes: possibly cut short."
+    )
+    beacons_expected: list[Beacon] = Field(
+        default_factory=list, description="Beacons sent for this capture, in order."
+    )
+    beacons_seen: list[BeaconSighting] = Field(
+        default_factory=list,
+        description="Beacon frames the capture read, in order. They count in "
+        "packets_observed but are never in the list stop() returns.",
+    )
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def beacons_missing(self) -> list[str]:
+        """Labels of the expected beacons the capture did not read."""
+        seen = {sighting.token for sighting in self.beacons_seen}
+        return [beacon.label for beacon in self.beacons_expected if beacon.token not in seen]
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def snaplen_sufficient(self) -> bool | None:
+        """Whether every frame was read in full up to required_bytes; None if none was required."""
+        if self.required_bytes is None:
+            return None
+        return self.snaplen is not None and self.snaplen >= self.required_bytes
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def instrument_healthy(self) -> bool:
@@ -202,14 +275,18 @@ class CaptureReport(BaseModel):
         and kept in the record: the PCAP file in file mode, the list otherwise.
 
         ``False`` if the instrument was unhealthy, a limit truncated the window or
-        the record, the file is incomplete, the kernel dropped packets, or packets
-        remained unread; ``None`` when the drop counters are unavailable, because
-        completeness then cannot be shown either way. In file mode the in-memory
-        sample is not the record, so its limits do not count here.
+        the record, the file is incomplete, the kernel dropped packets, packets
+        remained unread, an expected beacon was not seen, or the snaplen is below
+        the bytes the caller required; ``None`` when the drop counters are
+        unavailable, because completeness then cannot be shown either way. In
+        file mode the in-memory sample is not the record, so its limits do not
+        count here.
         """
         if not self.instrument_healthy:
             return False
         if self.artifact_complete is False:
+            return False
+        if self.beacons_missing or self.snaplen_sufficient is False:
             return False
         if any(
             not (self.output_mode == "file" and name in _SAMPLE_LIMITS)

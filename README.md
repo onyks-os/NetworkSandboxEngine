@@ -49,6 +49,7 @@ Key architectural properties:
 * **Self-verifying Oracle**: Every run injects a *canary* packet before the test packets and again after them, and reports a result only if the kernel trace for both was observed. See [The oracle contract](#the-oracle-contract).
 * **Dual-Stack and Topologies**: Native support for IPv4 and IPv6 traffic, plus multi-namespace Gateway topologies for router, NAT, and forwarding ruleset validation.
 * **Traffic from a real user, observed four ways**: `nse.stimuli` sends UDP, TCP, ICMP, DNS, QUIC-shaped and STUN traffic from a socket in a process running as a chosen UID/GID, so `output`-hook rules on `skuid`/`skgid` are tested as they run. `nse.receivers` are known servers that log every arrival. `nse.observe()` reports sent, on the wire, received and reply seen as separate facts, and "unknown" whenever the capture or the log cannot vouch for an absence. See [stimuli](https://onyks-os.github.io/nse/how-to/stimuli/), [receivers](https://onyks-os.github.io/nse/how-to/receivers/) and [observing a stimulus](https://onyks-os.github.io/nse/how-to/observing-a-stimulus/).
+* **Traffic through a window of time**: `nse.streams.StimulusStream` sends a numbered stimulus at a fixed rate while a rule reload or a restart happens, and `correlate()` says for each attempt whether it was not sent, refused, sent but not seen, on the wire or received. A stream that paused, a capture that missed a [beacon](https://onyks-os.github.io/nse/how-to/beacons/) frame or an incomplete log makes the window inconclusive, never clean. See [streams](https://onyks-os.github.io/nse/how-to/streams/).
 * **Small, auditable surface**: One package, no web server, no JavaScript, with 98% test coverage enforced by a ratchet.
 
 ### What a run changes on the host
@@ -181,12 +182,19 @@ and not icmp6`, which discarded routable ICMPv6 as well - see
 * **Python 3.10+**
 * **nftables** (`nft`)
 * **iproute2** (`ip`)
+* **util-linux** (`nsenter`, and `setpriv` to run a process as another identity; Fedora's minimal `util-linux-core` lacks `setpriv`)
 * **Root privileges** (required for `ip netns` and kernel trace operations)
 
 On Debian or Ubuntu systems:
 
 ```bash
-sudo apt update && sudo apt install -y nftables iproute2 conntrack
+sudo apt update && sudo apt install -y nftables iproute2 util-linux conntrack
+```
+
+On Fedora:
+
+```bash
+sudo dnf install -y nftables iproute util-linux conntrack-tools
 ```
 
 ---
