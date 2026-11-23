@@ -10,6 +10,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Thi
 
 ---
 
+## [2.5.1] - 2026-11-23
+
+### Fixed
+
+- **Two attempts of a bare-SYN stream could leave from the same source port.**
+  Attempt *n* bound `base + n - 1`; when that port was busy it moved to the
+  next one, which was attempt *n + 1*'s. A bare SYN is identified only by its
+  source port, so `correlate()` could credit one attempt's packet to the
+  other. Ports now come from one counter per stream: a busy port is skipped
+  and never shared. Ports are distinct, ascending, and no longer necessarily
+  consecutive.
+- The release workflow's TestPyPI smoke test now installs with
+  `--no-cache-dir` and waits up to 10 minutes. pip had kept re-reading the
+  index page it cached on its first attempt, so v2.5.0 never appeared and was
+  not published to PyPI. 2.5.1 is the first 2.5 release on PyPI.
+
+---
+
 ## [2.5.0] - 2026-11-23
 
 Traffic through a window of time, and captures that prove they saw it. A rule

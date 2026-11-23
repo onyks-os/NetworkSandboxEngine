@@ -143,7 +143,8 @@ StimulusStream(stimulus, period=0.02, count=None, duration=None, max_in_flight=2
   until the `async with` block ends.
 - **Probe IDs.** Every attempt carries its own probe ID: a 16-digit stream ID
   followed by the sequence number in 8 hex digits. A bare-SYN stream binds
-  consecutive source ports from a random base instead.
+  a distinct source port per attempt instead, counting up from a random base
+  and skipping any port that is busy, so no two attempts share one.
 - **Times.** `StreamAttempt.started_monotonic` is `CLOCK_MONOTONIC`, the clock
   `time.monotonic()` reads, so it compares directly with times the test takes.
 

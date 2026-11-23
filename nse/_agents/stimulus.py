@@ -316,6 +316,19 @@ class Stream:
         self.stop = threading.Event()
         self.lock = threading.Lock()
         self.threads: list[threading.Thread] = []
+        # A bare SYN is identified only by its source port, so no two attempts
+        # of a stream may share one. Ports come from one counter: an attempt
+        # whose port is busy takes the next unclaimed one, never a port another
+        # attempt was given.
+        source = plan.get("source_port")
+        self.next_port: int | None = None if source is None else int(source)
+
+    def claim_port(self) -> int | None:
+        with self.lock:
+            port = self.next_port
+            if port is not None:
+                self.next_port = 1024 + (port - 1024 + 1) % (65536 - 1024)
+            return port
 
     def probe_id(self, seq: int) -> str:
         return f"{self.stream['prefix']}{seq:08x}"
@@ -329,19 +342,28 @@ class Stream:
             data = data[:2] + _checksum(data).to_bytes(2, "big") + data[4:]
         return data
 
-    def attempt_plan(self, seq: int, probe_id: str) -> dict[str, Any]:
+    def attempt_plan(self, probe_id: str, source_port: int | None) -> dict[str, Any]:
         plan = dict(self.plan)
         plan.pop("stream")
         plan["payload"] = self.payload(probe_id).hex()
-        base = plan.get("source_port")
-        if base is not None:
-            plan["source_port"] = 1024 + (int(base) - 1024 + seq - 1) % (65536 - 1024)
+        if source_port is not None:
+            plan["source_port"] = source_port
+            plan["port_attempts"] = 1  # a busy port is retried with a newly claimed one
         return plan
+
+    def probe(self, probe_id: str) -> dict[str, Any]:
+        tries = max(1, int(self.plan.get("port_attempts", 1)))
+        for _ in range(tries):
+            report = Probe(self.attempt_plan(probe_id, self.claim_port())).run()
+            busy = report["stage"] == "bind" and report["errno"] == errno.EADDRINUSE
+            if self.next_port is None or not busy:
+                break
+        return report
 
     def attempt(self, seq: int, started: float) -> None:
         probe_id = self.probe_id(seq)
         try:
-            report = Probe(self.attempt_plan(seq, probe_id)).run()
+            report = self.probe(probe_id)
         except Exception as exc:  # a bug in one attempt must not end the stream silently
             report = {"outcome": "could_not_run", "stage": None, "error": repr(exc)}
         report.update(event="attempt", seq=seq, probe_id=probe_id, started_monotonic=started)

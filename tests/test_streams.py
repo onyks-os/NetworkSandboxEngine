@@ -238,7 +238,7 @@ async def test_bare_syns_of_a_stream_leave_from_distinct_source_ports(
     assert log.complete, log.problems
     ports = [a.result.source.port for a in log.attempts if a.result.source]
     assert len(ports) == 4
-    assert ports == list(range(ports[0], ports[0] + 4))
+    assert len(set(ports)) == 4  # a bare SYN's only identity is its port
     assert {a.result.outcome for a in log.attempts} == {"refused"}
 
 

@@ -293,16 +293,63 @@ def test_an_icmpv4_attempt_gets_a_valid_checksum() -> None:
     assert agent._checksum(b"\x01") == probe_packets.checksum(b"\x01")
 
 
-def test_attempt_source_ports_step_from_the_base_and_wrap() -> None:
+def test_attempt_source_ports_are_claimed_from_one_counter_and_wrap() -> None:
     from nse import stimuli
 
-    stream = agent.Stream(_stream_plan(stimuli.tcp_connect("127.0.0.1", 9)))
-    stream.plan["source_port"] = 65535
-    ports = [stream.attempt_plan(seq, stream.probe_id(seq))["source_port"] for seq in (1, 2, 3)]
+    plan = _stream_plan(stimuli.tcp_connect("127.0.0.1", 9))
+    plan["source_port"] = 65535
+    stream = agent.Stream(plan)
+    ports = [
+        stream.attempt_plan(stream.probe_id(1), stream.claim_port())["source_port"]
+        for _ in range(3)
+    ]
     assert ports == [65535, 1024, 1025]
-    assert "stream" not in stream.attempt_plan(1, stream.probe_id(1))
-    stream.plan["source_port"] = None
-    assert stream.attempt_plan(1, stream.probe_id(1))["source_port"] is None
+    assert "stream" not in stream.attempt_plan(stream.probe_id(1), None)
+    assert stream.attempt_plan(stream.probe_id(1), 2000)["port_attempts"] == 1
+    plan["source_port"] = None
+    unbound = agent.Stream(plan)
+    assert unbound.claim_port() is None
+    assert unbound.attempt_plan(unbound.probe_id(1), None).get("source_port") is None
+
+
+def test_a_busy_port_is_never_shared_with_the_next_attempt() -> None:
+    """Attempt 2's port is taken: it moves on, and attempt 3 gets a port of its own."""
+    import socket
+
+    from nse import stimuli
+
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        target = listener.getsockname()[1]
+        with socket.socket() as squatter:
+            squatter.bind(("0.0.0.0", 0))
+            busy = squatter.getsockname()[1]
+            plan = _stream_plan(stimuli.tcp_connect("127.0.0.1", target, timeout=0.5))
+            plan["source_port"] = busy - 1 if busy > 1024 else 65535
+            stream = agent.Stream(plan)
+            reports = [stream.probe(stream.probe_id(seq)) for seq in (1, 2, 3)]
+    ports = [r["source"][1] for r in reports]
+    assert busy not in ports
+    assert len(set(ports)) == 3, ports
+    assert all(r["outcome"] == "answered" for r in reports), reports
+
+
+def test_a_stream_gives_up_after_port_attempts_busy_ports() -> None:
+    import socket
+
+    from nse import stimuli
+
+    with socket.socket() as squatter:
+        squatter.bind(("0.0.0.0", 0))
+        busy = squatter.getsockname()[1]
+        plan = _stream_plan(stimuli.tcp_connect("127.0.0.1", 9))
+        plan["source_port"] = busy
+        plan["port_attempts"] = 1
+        stream = agent.Stream(plan)
+        report = stream.probe(stream.probe_id(1))
+    assert report["outcome"] == "could_not_run"
+    assert report["stage"] == "bind"
 
 
 def _events(capsys: pytest.CaptureFixture[str]) -> list[dict[str, Any]]:
