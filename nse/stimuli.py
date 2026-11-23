@@ -40,17 +40,19 @@ only :func:`icmp_echo` with ``socket="raw"`` (the default) uses one.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import itertools
 import json
 import os
 import random
 import sys
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from nse import _agents
 from nse.core import probe_packets
+from nse.core.paths import BinaryNotFoundError
 from nse.core.process import ProcessStartError
 from nse.models.process import ProcessIdentity, ProcessResult
 from nse.models.stimulus import (
@@ -63,23 +65,29 @@ from nse.models.stimulus import (
 )
 
 if TYPE_CHECKING:
+    from nse.core.trace_harvester import TraceHarvester, TraceReadiness
     from nse.models.capture_report import CaptureReport
-    from nse.models.stimulus import Receipt
+    from nse.models.stimulus import Receipt, ReceiptLog
+    from nse.models.trace_event import TraceEvent
     from nse.receivers import Receiver
 
 __all__ = [
     "Observation",
     "Stimulus",
+    "Window",
     "default_python",
     "dns_query",
     "icmp_echo",
     "observe",
+    "observe_window",
     "quic_initial",
     "replies_in",
     "requests_in",
     "stun_binding",
     "tcp_connect",
     "tcp_round_trip",
+    "trace_matches",
+    "trace_ready",
     "udp",
     "udp_round_trip",
 ]
@@ -225,6 +233,8 @@ class Stimulus:
         except ProcessStartError as exc:
             detail = exc.stderr.decode(errors="replace").strip()[-_STDERR_TAIL:]
             return self._failed(probe_id, "launch", f"{exc}" + (f": {detail}" if detail else ""))
+        except BinaryNotFoundError as exc:  # setpriv on a minimal image, for instance
+            return self._failed(probe_id, "launch", str(exc))
         return self._result(probe_id, process)
 
     def _base(self, probe_id: str) -> dict[str, Any]:
@@ -270,12 +280,7 @@ class Stimulus:
             )
         lines = (process.stdout or b"").decode(errors="replace").strip().splitlines()
         try:
-            report = json.loads(lines[-1])
-            outcome: Outcome = report["outcome"]
-            if outcome not in _OUTCOMES or (
-                report["stage"] is not None and report["stage"] not in _STAGES
-            ):
-                raise ValueError(f"unknown outcome or stage in {report!r}")
+            return self._from_report(probe_id, json.loads(lines[-1]), process.identity)
         except (IndexError, KeyError, TypeError, ValueError) as exc:
             return self._failed(
                 probe_id,
@@ -283,6 +288,14 @@ class Stimulus:
                 f"the probe's report is unreadable ({exc}); stderr: {stderr or '<none>'}",
                 process.identity,
             )
+
+    def _from_report(self, probe_id: str, report: dict[str, Any], identity: Any) -> StimulusResult:
+        """The agent's JSON report as a result; ``ValueError``/``KeyError`` if it is not one."""
+        outcome: Outcome = report["outcome"]
+        if outcome not in _OUTCOMES or (
+            report["stage"] is not None and report["stage"] not in _STAGES
+        ):
+            raise ValueError(f"unknown outcome or stage in {report!r}")
         reply = bytes.fromhex(report["reply"]) if report.get("reply") else None
         error = report.get("error")
         dns = mapped = None
@@ -309,7 +322,7 @@ class Stimulus:
             sent_at=report.get("sent_at"),
             sent_monotonic=report.get("sent_monotonic"),
             ended_monotonic=report.get("ended_monotonic"),
-            identity=process.identity,
+            identity=identity,
         )
 
     def with_reply(self, timeout: float | None) -> Stimulus:
@@ -445,19 +458,28 @@ def stun_binding(host: str, port: int = 3478, *, timeout: float | None = 2.0) ->
 # --------------------------------------------------------------------------- observation
 
 
-def requests_in(result: StimulusResult, packets: Iterable[Any]) -> list[Any]:
+def requests_in(result: StimulusResult, packets: Iterable[Any], *, nat: bool = False) -> list[Any]:
     """The packets in *packets* that are *result*'s request.
 
     A packet matches by the probe ID it carries, or, for a bare SYN, by the
-    source port the probe bound. Use it when one capture holds several
-    stimuli, for instance a probe and a later control in the same window.
+    source port the probe bound, on its way to the stimulus's destination. Use
+    it when one capture holds several stimuli, for instance a probe and a later
+    control in the same window.
+
+    With *nat*, the destination is not compared, so a probe whose destination
+    a DNAT or a redirect rewrote is still recognised; read where it went from
+    the packets' own addresses. A NAT that rewrites the source port of a bare
+    SYN still hides it.
     """
-    return probe_packets.request_packets(result, packets)
+    return probe_packets.request_packets(result, packets, nat=nat)
 
 
-def replies_in(result: StimulusResult, packets: Iterable[Any]) -> list[Any]:
-    """The packets in *packets* that answer *result*'s request (ICMP errors excluded)."""
-    return probe_packets.reply_packets(result, packets)
+def replies_in(result: StimulusResult, packets: Iterable[Any], *, nat: bool = False) -> list[Any]:
+    """The packets in *packets* that answer *result*'s request (ICMP errors excluded).
+
+    With *nat*, a reply counts from whatever source answered.
+    """
+    return probe_packets.reply_packets(result, packets, nat=nat)
 
 
 @dataclass(frozen=True)
@@ -478,6 +500,9 @@ class Observation:
     on_wire: bool | None
     received: bool | None
     reply_on_wire: bool | None
+    canary: Observation | None = None
+    """The canary sent after the stimulus in the same window, if one was asked for.
+    Unless it was seen on the wire, no absence above is ``False``."""
 
     @property
     def sent(self) -> bool:
@@ -527,8 +552,85 @@ class Observation:
             f"reply on the wire: {fact(self.reply_on_wire)} ({len(self.replies)} packet(s)); "
             f"capture on {self.capture.iface}: {self.capture.packets_observed} packet(s), "
             f"window complete: {self.capture.window_complete}"
+            + _canary_note(self.canary)
             + "".join(f"; CONTRADICTION: {problem}" for problem in self.contradictions())
         )
+
+
+def _canary_note(canary: Observation | None) -> str:
+    if canary is None:
+        return ""
+    if canary.on_wire is True:
+        return "; canary: seen"
+    return f"; canary: NOT seen ({canary.result.describe()}): no absence is vouched for"
+
+
+@dataclass(frozen=True)
+class Window:
+    """Several stimuli, and optionally a canary, observed in one capture window.
+
+    The canary is sent after every stimulus, inside the same window, and must
+    be traffic the rules under test let through. Seeing it on the wire proves
+    the capture was open and looking at the right link across all of them; a
+    capture that silently stopped, or watches another link, does not see it,
+    and then no stimulus's absence is ``False``.
+    """
+
+    observations: tuple[Observation, ...]
+    canary: Observation | None
+    capture: CaptureReport
+    packets: tuple[Any, ...]
+
+    @property
+    def canary_seen(self) -> bool | None:
+        """Whether the canary was on the wire; None when no canary was sent."""
+        return None if self.canary is None else self.canary.on_wire is True
+
+    @property
+    def vouched(self) -> bool:
+        """The capture can vouch for an absence: healthy, complete, canary seen."""
+        return _vouched(self.capture, self.canary)
+
+    def contradictions(self) -> list[str]:
+        """Every observation's contradictions, the canary's included, named by probe."""
+        found = []
+        for observation in (*self.observations, *(o for o in (self.canary,) if o is not None)):
+            found += [
+                f"{observation.result.kind} {observation.result.probe_id}: {problem}"
+                for problem in observation.contradictions()
+            ]
+        return found
+
+    @property
+    def conclusive(self) -> bool:
+        return self.vouched and not self.contradictions()
+
+    def __iter__(self) -> Iterator[Observation]:
+        return iter(self.observations)
+
+    def __len__(self) -> int:
+        return len(self.observations)
+
+    def __getitem__(self, index: int) -> Observation:
+        return self.observations[index]
+
+    def describe(self) -> str:
+        lines = [observation.describe() for observation in self.observations]
+        if self.canary is not None:
+            lines.append("canary: " + self.canary.describe())
+        lines.append(
+            f"window: vouched {self.vouched}, conclusive {self.conclusive}, "
+            f"{len(self.packets)} packet(s)"
+        )
+        return "\n".join(lines)
+
+
+def _vouched(capture: CaptureReport, canary: Observation | None) -> bool:
+    return (
+        capture.instrument_healthy
+        and capture.window_complete is True
+        and (canary is None or canary.on_wire is True)
+    )
 
 
 class _Unset:
@@ -549,6 +651,9 @@ async def observe(
     capture_filter: str | None = None,
     settle: float = 0.3,
     python: str | None = None,
+    canary: Stimulus | None = None,
+    canary_identity: ProcessIdentity | _Unset | None = _UNSET,
+    nat: bool = False,
 ) -> Observation:
     """Run *stimulus* in *sandbox* with a capture armed, and report each fact separately.
 
@@ -560,36 +665,110 @@ async def observe(
     A capture that was not healthy, or whose window is not known to be complete
     (kernel drops, limits, or counters unavailable), cannot turn "not seen"
     into ``False``: the fact is ``None``. A capture on the wrong interface is
-    still a complete window that saw nothing; arm a control stimulus you know
-    must be seen when that matters.
+    still a complete window that saw nothing: pass a *canary*, a stimulus the
+    rules let through, sent after *stimulus* in the same window (as
+    *canary_identity*, by default *identity*). Unless the canary is seen, no
+    absence is ``False``. *nat* recognises the probe after its destination was
+    rewritten (see :func:`requests_in`).
+    """
+    window = await observe_window(
+        sandbox,
+        [stimulus],
+        identity=identity,
+        receiver=receiver,
+        iface=iface,
+        netns=netns,
+        capture_filter=capture_filter,
+        settle=settle,
+        python=python,
+        canary=canary,
+        canary_identity=canary_identity,
+        nat=nat,
+    )
+    return window.observations[0]
+
+
+async def observe_window(
+    sandbox: Any,
+    stimuli: Sequence[Stimulus],
+    *,
+    identity: ProcessIdentity | None = None,
+    receiver: Receiver | None = None,
+    iface: str | None = None,
+    netns: str | _Unset | None = _UNSET,
+    capture_filter: str | None = None,
+    settle: float = 0.3,
+    python: str | None = None,
+    canary: Stimulus | None = None,
+    canary_identity: ProcessIdentity | _Unset | None = _UNSET,
+    nat: bool = False,
+) -> Window:
+    """Run several stimuli, then an optional *canary*, inside **one** capture window.
+
+    The stimuli run in order as *identity*; the canary runs last, as
+    *canary_identity* (by default *identity*), and must be traffic the rules
+    under test allow. Each stimulus gets its own :class:`Observation`, matched
+    by its probe ID, with the canary attached; the :class:`Window` holds them
+    all. The other arguments are those of :func:`observe`.
     """
     from nse.core.sniffer import PCAPAsserter
 
+    if not stimuli:
+        raise ValueError("observe_window needs at least one stimulus")
     asserter = PCAPAsserter(
         iface=iface or sandbox.ext_iface,
         filter=capture_filter,
         netns=sandbox.ext_netns if isinstance(netns, _Unset) else netns,
     )
     await asserter.start()
+    canary_result: StimulusResult | None = None
     try:
-        result = await stimulus.run(sandbox, identity=identity, python=python)
+        results = [
+            await stimulus.run(sandbox, identity=identity, python=python) for stimulus in stimuli
+        ]
+        if canary is not None:
+            canary_result = await canary.run(
+                sandbox,
+                identity=identity if isinstance(canary_identity, _Unset) else canary_identity,
+                python=python,
+            )
         await asyncio.sleep(settle)
     finally:
         report = await asserter.stop_report()
     packets = await asserter.stop() if report.instrument_healthy else []
-    conclusive = report.instrument_healthy and report.window_complete is True
+    log = receiver.log() if receiver is not None else None
+    base = _vouched(report, None)
+    canary_seen = None
+    if canary_result is not None:
+        canary_seen = _observation(canary_result, report, packets, log, base, nat, None)
+    vouched = _vouched(report, canary_seen)
+    observations = tuple(
+        _observation(result, report, packets, log, vouched, nat, canary_seen) for result in results
+    )
+    return Window(
+        observations=observations, canary=canary_seen, capture=report, packets=tuple(packets)
+    )
 
+
+def _observation(
+    result: StimulusResult,
+    report: CaptureReport,
+    packets: list[Any],
+    log: ReceiptLog | None,
+    conclusive: bool,
+    nat: bool,
+    canary: Observation | None,
+) -> Observation:
     def fact(found: list[Any]) -> bool | None:
         if found:
             return True
         return False if conclusive else None
 
-    requests = requests_in(result, packets)
-    replies = replies_in(result, packets)
+    requests = requests_in(result, packets, nat=nat)
+    replies = replies_in(result, packets, nat=nat)
     receipts: tuple[Receipt, ...] | None = None
     received: bool | None = None
-    if receiver is not None:
-        log = receiver.log()
+    if log is not None:
         receipts = tuple(log.matching(result))
         received = True if receipts else (False if log.complete else None)
     return Observation(
@@ -601,4 +780,56 @@ async def observe(
         on_wire=fact(requests),
         received=received,
         reply_on_wire=fact(replies),
+        canary=canary,
+    )
+
+
+def trace_matches(stimulus: Stimulus) -> Callable[[TraceEvent], bool]:
+    """A predicate for trace events of packets toward *stimulus*'s destination.
+
+    It compares the destination address, the transport and (for UDP and TCP)
+    the port, which is what ``nft monitor trace`` prints; a probe ID is not in
+    the trace. Give a canary a destination nothing else in the test uses.
+    """
+    host = ipaddress.ip_address(stimulus.host)
+    protocol = stimulus.transport
+
+    def matches(event: TraceEvent) -> bool:
+        if event.packet_dst_ip is None or event.packet_protocol != protocol:
+            return False
+        try:
+            if ipaddress.ip_address(event.packet_dst_ip) != host:
+                return False
+        except ValueError:
+            return False
+        return protocol == "icmp" or event.packet_dst_port == stimulus.port
+
+    return matches
+
+
+async def trace_ready(
+    harvester: TraceHarvester,
+    sandbox: Any,
+    canary: Stimulus,
+    *,
+    identity: ProcessIdentity | None = None,
+    attempts: int = 5,
+    timeout: float = 1.0,
+    python: str | None = None,
+) -> TraceReadiness:
+    """Prove a running *harvester* sees traces, by sending *canary* until its trace returns.
+
+    The canary runs in *sandbox* as *identity*. For traffic a process
+    generates, the rules must be loaded with ``RuleEngine(trace_output=True)``,
+    or no output-path packet is traced. An attempt that ``could_not_run`` is
+    not a canary and is reported in ``problems``. Drop the canary's traces with
+    :meth:`TraceReadiness.without` before reading the subject's.
+    """
+
+    async def send() -> str | None:
+        result = await canary.run(sandbox, identity=identity, python=python)
+        return result.describe() if result.outcome == "could_not_run" else None
+
+    return await harvester.prove_ready(
+        send, trace_matches(canary), attempts=attempts, timeout=timeout
     )

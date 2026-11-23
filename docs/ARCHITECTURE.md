@@ -20,11 +20,13 @@ NetworkSandboxEngine/
 |
 |-- nse/                        # PyPI wheel (only this directory is packaged)
 |   |-- __init__.py             # Public API: NetnsController, PCAPAsserter, CaptureReport, CaptureLimits, Capture*Error
-|   |-- stimuli.py              # Stimulus, observe(): real sockets as a chosen identity, four facts
+|   |-- stimuli.py              # Stimulus, observe(), observe_window(): real sockets as a chosen identity, four facts
+|   |-- streams.py              # StimulusStream, correlate(): a numbered stimulus at a fixed rate
 |   |-- receivers.py            # Controlled receivers: UDP/TCP echo, DNS, STUN, with a receipt log
 |   |-- _agents/                # Stdlib programs run inside namespaces (stimulus, receiver)
 |   |-- core/
 |   |   |-- probe_packets.py    # Probe IDs, DNS/STUN/QUIC/ICMP bytes, finding a probe in a capture
+|   |   |-- beacons.py          # Non-IP beacon frames that prove a capture saw a window
 |   |   |-- naming.py           # Uniform netns/veth derive_names() and sweep rules
 |   |   |-- host_firewall.py    # Warns when the host's input hooks may filter the host endpoint
 |   |   |-- netns_controller.py # Namespace lifecycle, veth wiring, and startup sweep
@@ -36,7 +38,7 @@ NetworkSandboxEngine/
 |   |   |-- pipeline.py         # One experiment, two entry points: run_test_pipeline() / _report()
 |   |   |-- environment.py      # Versions of NSE, Python, dependencies, kernel and tools
 |   |   |-- verdicts.py         # One verdict per stimulus, shared by the CLI and the report
-|   |   |-- rule_engine.py      # nft load / validate / trace-arm
+|   |   |-- rule_engine.py      # nft load / validate / trace-arm (prerouting, optionally output)
 |   |   |-- trace_harvester.py  # nft monitor trace parser and readiness probe
 |   |   `-- mock_listener.py    # TCP/UDP echo daemons, started managed and confirmed bound
 |   |-- models/
@@ -98,6 +100,7 @@ Handles compilation and injection of `nftables` rulesets with enforced subproces
 
 - `validate(rules_text)`: dry-run using `nft --check -f <file>`. Raises `RuleValidationError` on failure with line-level details.
 - `load(rules_text, netns)`: loads rules into a specific namespace and prepends `meta nftrace set 1` to arm kernel tracing.
+- `RuleEngine(trace_output=True)` also arms tracing in the `output` hook (priority -350), so traffic a process generates inside the namespace is traced too.
 
 ### 3.3 `TraceHarvester` (`nse/core/trace_harvester.py`)
 
@@ -115,6 +118,10 @@ every way it can stop seeing observable.
   pipeline turns into `error` events.
 - `wait_for_event(timeout)`: resolves only once the kernel has actually delivered
   a parsed event. This is the readiness proof the canary probe uses.
+- `prove_ready(send, predicate)`: sends a canary until one of its own trace
+  events comes back, and returns a `TraceReadiness` whose `without(events)`
+  removes the canary's traces. `stimuli.trace_ready()` uses a stimulus as the
+  canary.
 - `wait_ready(timeout=2.0)`: signals that *this process* is reading. Retained for
   diagnostics and explicitly **not** sufficient to conclude that a later packet
   will be observed - it fires before `nft monitor trace` has subscribed to the
@@ -185,7 +192,17 @@ injected frames.
 - `observe()` runs one stimulus inside one `PCAPAsserter` window and reports
   `on_wire`, `received` and `reply_on_wire` as `True`, `False` or `None`
   (the instrument cannot vouch for the absence). `Observation.contradictions()`
-  names combinations that mean an instrument is blind.
+  names combinations that mean an instrument is blind. With `canary=`, an
+  absence is `False` only if the canary sent after the stimulus was seen in the
+  same window; `observe_window()` runs several stimuli in one window, and
+  `nat=True` recognises a probe after its destination was rewritten.
+- `StimulusStream` runs one program that sends a stimulus once per period, each
+  attempt with its own sequence number and probe ID. `correlate()` joins its
+  log with a capture and a receiver's log, and reports gaps longer than
+  `max_gap_periods` as an inconclusive window.
+- Beacons (`nse/core/beacons.py`) are EtherType `0x88B5` frames sent through
+  `AF_PACKET` at a known moment; a `CaptureReport` with an expected beacon
+  missing is not `window_complete`.
 
 ---
 

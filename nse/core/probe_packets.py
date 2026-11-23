@@ -258,12 +258,20 @@ def _carries_probe(result: StimulusResult, upper: Any) -> bool:
     return extract_probe_id(data) == result.probe_id
 
 
-def request_packets(result: StimulusResult, packets: Iterable[Any]) -> list[Any]:
+def request_packets(
+    result: StimulusResult, packets: Iterable[Any], *, nat: bool = False
+) -> list[Any]:
     """The captured packets that are *result*'s stimulus, travelling to its destination.
 
     A packet counts when it goes to the destination's address (and port) and
     carries the probe ID, or, for TCP without a payload, leaves from the source
     port the probe bound.
+
+    With *nat*, the destination is not compared: a packet counts wherever it
+    goes, as long as it leaves from the probe's source (when known) and
+    carries the probe ID, or, for a bare SYN, leaves from the bound port. That recognises a probe after a DNAT or a redirect
+    rewrote its destination; the packets' own addresses say where it went. A
+    NAT that rewrites the *source* port of a bare SYN still hides it.
     """
     found = []
     for packet in packets:
@@ -271,13 +279,22 @@ def request_packets(result: StimulusResult, packets: Iterable[Any]) -> list[Any]
         if layers is None:
             continue
         network, upper = layers
-        if network.dst != result.destination.address or not _transport_matches(result, upper):
+        if not _transport_matches(result, upper):
+            continue
+        if not nat and network.dst != result.destination.address:
             continue
         if result.transport == "icmp":
             if upper.type in (8, 128) and _carries_probe(result, upper):
                 found.append(packet)
             continue
-        if upper.dport != result.destination.port:
+        if nat:
+            # Any destination, so the direction comes from the probe's own end:
+            # an echoed reply carries the same probe ID.
+            if result.source is not None and not _from_endpoint(
+                network.src, upper.sport, result.source
+            ):
+                continue
+        elif upper.dport != result.destination.port:
             continue
         if _carries_probe(result, upper) or (
             result.source is not None and upper.sport == result.source.port
@@ -286,21 +303,86 @@ def request_packets(result: StimulusResult, packets: Iterable[Any]) -> list[Any]
     return found
 
 
-def reply_packets(result: StimulusResult, packets: Iterable[Any]) -> list[Any]:
-    """The captured packets that answer *result*'s stimulus, travelling back to it."""
+def _from_endpoint(address: str, port: int, endpoint: Endpoint) -> bool:
+    """*address*:*port* is *endpoint*, an unspecified address matching any."""
+    if port != endpoint.port:
+        return False
+    return endpoint.address in ("", "0.0.0.0", "::") or address == endpoint.address
+
+
+class RequestIndex:
+    """Captured packets toward one destination (any, with *nat*), indexed by probe ID and
+    source port.
+
+    Built in one pass, so matching many stimuli of the same kind and
+    destination (a stream) does not rescan the capture for each one.
+    :meth:`requests` gives exactly what :func:`request_packets` would.
+    """
+
+    def __init__(
+        self, template: StimulusResult, packets: Iterable[Any], *, nat: bool = False
+    ) -> None:
+        self.nat = nat
+        self.by_probe: dict[str, list[Any]] = {}
+        self.by_port: dict[int, list[Any]] = {}
+        for packet in packets:
+            layers = _layers(packet)
+            if layers is None:
+                continue
+            network, upper = layers
+            if not nat and network.dst != template.destination.address:
+                continue
+            if not _transport_matches(template, upper):
+                continue
+            data = bytes(upper) if template.transport == "icmp" else bytes(upper.payload)
+            probe_id = extract_probe_id(data)
+            if probe_id is not None:
+                self.by_probe.setdefault(probe_id, []).append(packet)
+            if template.transport != "icmp":
+                self.by_port.setdefault(int(upper.sport), []).append(packet)
+
+    def requests(self, result: StimulusResult) -> list[Any]:
+        candidates = list(self.by_probe.get(result.probe_id, ()))
+        if result.source is not None:
+            known = {id(packet) for packet in candidates}
+            candidates += [
+                packet
+                for packet in self.by_port.get(result.source.port, ())
+                if id(packet) not in known
+            ]
+        return request_packets(result, candidates, nat=self.nat)
+
+
+def reply_packets(
+    result: StimulusResult, packets: Iterable[Any], *, nat: bool = False
+) -> list[Any]:
+    """The captured packets that answer *result*'s stimulus, travelling back to it.
+
+    With *nat*, the reply's source (the rewritten destination answering) is
+    not compared; when the probe's own source is known, the reply must be
+    addressed to it.
+    """
     found = []
     for packet in packets:
         layers = _layers(packet)
         if layers is None:
             continue
         network, upper = layers
-        if network.src != result.destination.address or not _transport_matches(result, upper):
+        if not _transport_matches(result, upper):
+            continue
+        if not nat and network.src != result.destination.address:
             continue
         if result.transport == "icmp":
             if upper.type in (0, 129) and _carries_probe(result, upper):
                 found.append(packet)
             continue
-        if upper.sport != result.destination.port:
+        if nat:
+            # Any source answered, so the reply must be addressed to the probe.
+            if result.source is not None and not _from_endpoint(
+                network.dst, upper.dport, result.source
+            ):
+                continue
+        elif upper.sport != result.destination.port:
             continue
         if (result.source is not None and upper.dport == result.source.port) or _carries_probe(
             result, upper

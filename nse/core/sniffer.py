@@ -55,11 +55,14 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Literal
 
+from nse.core import beacons as _beacons
 from nse.core.async_work import finish_work
 from nse.core.utils import enter_netns
 from nse.models.capture_report import (
     PCAP_HEADER_BYTES,
     PCAP_RECORD_HEADER_BYTES,
+    Beacon,
+    BeaconSighting,
     CaptureLimits,
     CaptureReport,
     LimitName,
@@ -112,6 +115,8 @@ _PCAP_SNAPLEN = 262144
 #: Linux ARPHRD_* hardware type of the bound socket -> PCAP LINKTYPE_*. Loopback
 #: frames carry an Ethernet header on Linux; ARPHRD_NONE (tun) delivers raw IP.
 _ARPHRD_TO_LINKTYPE = {1: 1, 772: 1, 65534: 101}
+#: Hardware types whose frames carry an Ethernet header, so a beacon can cross them.
+_ETHERNET_HARDWARE = frozenset({1, 772})
 #: Buffer for the PCAP file; flushed when it fills, when the capture is idle for
 #: _FLUSH_IDLE seconds, and on close.
 _WRITE_BUFFER = 64 * 1024
@@ -203,6 +208,14 @@ def _raw_bytes(packet: Any) -> bytes:
     if isinstance(original, (bytes, bytearray)):
         return bytes(original)
     return bytes(packet)
+
+
+def _hardware_type(sock: Any) -> int | None:
+    """Linux ARPHRD_* type of the interface *sock* is bound to; None if it cannot be read."""
+    try:
+        return int(sock.ins.getsockname()[3])
+    except (OSError, IndexError, TypeError, ValueError):
+        return None
 
 
 def _linktype(sock: Any) -> int:
@@ -301,6 +314,10 @@ class _CaptureLoop(threading.Thread):
         self.start_error: BaseException | None = None
         self.kernel: tuple[int, int] | None = None
         self.stats_reason: str | None = None
+        self.beacons: list[BeaconSighting] = []
+        self.truncated = 0
+        self.hardware_type: int | None = None
+        self.snaplen: int | None = None
 
     def request_stop(self) -> None:
         if not self.stop_requested.is_set():
@@ -323,6 +340,7 @@ class _CaptureLoop(threading.Thread):
                     # socket created and bound in that namespace.
                     enter_netns(self.netns)
                 sock = _open_socket(self.iface, self.bpf)
+                self._describe_link(sock)
                 if self.output is not None:
                     self.writer = _PcapFile(self.output, _linktype(sock))
             except Exception as exc:
@@ -354,6 +372,12 @@ class _CaptureLoop(threading.Thread):
             self._close_writer()
             self.close_pipe()
             self.stopped_at = time.time()
+
+    def _describe_link(self, sock: Any) -> None:
+        from scapy.data import MTU
+
+        self.snaplen = int(MTU)  # what the backend asks for on every read
+        self.hardware_type = _hardware_type(sock)
 
     def close_pipe(self) -> None:
         with self._fd_lock:
@@ -433,7 +457,18 @@ class _CaptureLoop(threading.Thread):
         raw = _raw_bytes(packet)
         self.observed += 1
         self.bytes += len(raw)
-        self._store(packet, len(raw))
+        if self.snaplen is not None and len(raw) >= self.snaplen:
+            self.truncated += 1
+        beacon = _beacons.parse(raw)
+        if beacon is not None:  # recorded, written, never in the packet list
+            token, label = beacon
+            self.beacons.append(
+                BeaconSighting(
+                    label=label, token=token, seen_at=float(packet.time), index=self.observed - 1
+                )
+            )
+        else:
+            self._store(packet, len(raw))
         self._write(packet, raw)
         limit = self.limits.max_packets
         if limit is not None and self.observed >= limit:
@@ -508,6 +543,8 @@ class PCAPAsserter:
         output: str | os.PathLike[str] | None = None,
         limits: CaptureLimits | None = None,
         netns: str | None = None,
+        beacons: bool = False,
+        required_bytes: int | None = None,
     ) -> None:
         """
         Arm a sniffer on *iface*.
@@ -529,7 +566,14 @@ class PCAPAsserter:
         is a start failure), and memory keeps only a sample, by default none
         (``max_stored_packets=0``). *limits* bounds the capture in either mode;
         see :class:`~nse.models.capture_report.CaptureLimits`.
+
+        *beacons* admits beacon frames (:meth:`mark`) through a custom
+        *filter*; the default filter already admits them. *required_bytes*
+        declares how much of each frame the caller needs: a capture that reads
+        less is never ``window_complete``.
         """
+        if required_bytes is not None and required_bytes < 1:
+            raise ValueError("required_bytes must be positive")
         limits = limits or CaptureLimits()
         if output is None and limits.max_file_bytes is not None:
             raise ValueError("max_file_bytes needs an output file")
@@ -551,6 +595,11 @@ class PCAPAsserter:
             self.filter = f"({DEFAULT_FILTER}) and ({filter})"
         else:
             self.filter = DEFAULT_FILTER
+        self.beacons = beacons
+        if beacons and filter:
+            self.filter = f"({self.filter}) or ({_beacons.FILTER})"
+        self.required_bytes = required_bytes
+        self._expected: list[Beacon] = []
 
         self.state: State = "created"
         self._loop_thread: _CaptureLoop | None = None
@@ -629,6 +678,48 @@ class PCAPAsserter:
         self.state = "finished"
         await finish_work(asyncio.get_running_loop().run_in_executor(None, self._shutdown, 1.0))
 
+    # ---------------------------------------------------------------- beacons
+    async def mark(self, label: str, *, via: Any = None) -> Beacon:
+        """Send a beacon this capture must see, and expect it.
+
+        With no *via*, the frame is sent on the captured interface itself, so
+        seeing it proves the capture was reading at that moment. With
+        ``via=sandbox`` it is sent by :meth:`NamespaceSandbox.beacon` from the
+        sandbox's end of its link, so seeing it also proves the path from the
+        sandbox reaches the capture. Mark before and after a window: the report
+        is ``window_complete`` only if every expected beacon was seen.
+
+        Raises :class:`CaptureStateError` unless the capture is running, or if
+        a custom filter was given without ``beacons=True`` (it may drop them),
+        and ``OSError`` if the frame cannot be sent.
+        """
+        if self.state != "running":
+            raise CaptureStateError(f"capture on {self.iface} is not running")
+        if self.requested_filter and not self.beacons:
+            raise CaptureStateError(
+                f"capture on {self.iface} has a custom filter that may drop beacons; "
+                "create it with beacons=True"
+            )
+        thread = self._loop_thread
+        assert thread is not None
+        if thread.hardware_type not in _ETHERNET_HARDWARE:
+            raise CaptureStateError(
+                f"capture on {self.iface} is not on an Ethernet link "
+                f"(ARPHRD {thread.hardware_type}): beacon frames cannot cross it"
+            )
+        if via is None:
+            beacon = await _beacons.send(self.iface, self.netns, label)
+        else:
+            beacon = await via.beacon(label)
+        self._expected.append(beacon)
+        return beacon
+
+    def expect(self, beacon: Beacon) -> None:
+        """Expect *beacon*, sent by other means (e.g. ``sandbox.beacon()``), in this capture."""
+        if self.state == "finished" or self._report is not None:
+            raise CaptureStateError(f"capture on {self.iface} has already stopped")
+        self._expected.append(beacon)
+
     # ------------------------------------------------------------------- stop
     async def stop(self, timeout: float = DEFAULT_STOP_TIMEOUT) -> list[Packet]:
         """Stop the capture and return the packets it stored.
@@ -655,7 +746,7 @@ class PCAPAsserter:
                 self.iface,
                 report.kernel_drops,
             )
-        if report.packets_stored < report.packets_observed:
+        if report.packets_stored < report.packets_observed - len(report.beacons_seen):
             logger.warning(
                 "capture on %s: returning %d of %d packet(s) observed (%s mode, limits %s); "
                 "use stop_report() for the counters",
@@ -776,6 +867,17 @@ class PCAPAsserter:
             kernel_packets=kernel[0] if kernel else None,
             kernel_drops=kernel[1] if kernel else None,
             stats_unavailable_reason=None if kernel else reason,
+            hardware_type=thread.hardware_type,
+            link_type=(
+                None
+                if thread.hardware_type is None
+                else _ARPHRD_TO_LINKTYPE.get(thread.hardware_type)
+            ),
+            snaplen=thread.snaplen,
+            required_bytes=self.required_bytes,
+            packets_truncated=thread.truncated,
+            beacons_expected=list(self._expected),
+            beacons_seen=list(thread.beacons),
         )
 
     def _artifact_state(

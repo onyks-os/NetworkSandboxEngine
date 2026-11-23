@@ -76,6 +76,7 @@ class Backend:
         self.stats: tuple[int, int] | None = (0, 0)
         self.stats_calls = 0
         self.linktype = 1
+        self.hardware_type: int | None = 1
 
     def open(self, iface: str, bpf: str) -> FakeSocket:
         self.iface, self.bpf = iface, bpf
@@ -99,6 +100,7 @@ def backend() -> Iterator[Backend]:
         patch.object(sniffer, "_open_socket", fake.open),
         patch.object(sniffer, "_read_stats", fake.read_stats),
         patch.object(sniffer, "_linktype", lambda sock: fake.linktype),
+        patch.object(sniffer, "_hardware_type", lambda sock: fake.hardware_type),
     ):
         yield fake
     if fake.open_gate is not None:
@@ -1008,3 +1010,189 @@ async def test_a_capture_without_netns_stays_in_nses_namespace(backend: Backend)
         report = await asserter.stop_report()
     enter.assert_not_called()
     assert report.netns is None
+
+
+# --------------------------------------------------------------------------- beacons and link
+
+
+def _beacon_frame(label: str, token: str) -> bytes:
+    from nse.core import beacons
+
+    return beacons.frame(label, token)
+
+
+def _fake_sender(backend: Backend, deliver: bool = True) -> Callable[..., Any]:
+    """A beacons.send stand-in: build the beacon, and put its frame on the fake link."""
+    from nse.core import beacons
+
+    async def send(iface: str, netns: str | None, label: str) -> Any:
+        beacon = beacons.Beacon(
+            label=label,
+            token=os.urandom(16).hex(),
+            iface=iface,
+            netns=netns,
+            sent_at=time.time(),
+            sent_monotonic=time.monotonic(),
+        )
+        if deliver:
+            backend.socket.send(beacons.frame(label, beacon.token))
+        return beacon
+
+    return send
+
+
+async def test_marked_window_is_complete_and_beacons_stay_out_of_the_packets(
+    backend: Backend,
+) -> None:
+    asserter = PCAPAsserter("veth0")
+    await asserter.start()
+    with patch.object(sniffer._beacons, "send", _fake_sender(backend)):
+        first = await asserter.mark("start")
+        backend.socket.send(b"payload")
+        await asserter.mark("end")
+    packets = await asserter.stop()
+    report = await asserter.stop_report()
+    assert [bytes(p) for p in packets] == [b"payload"]
+    assert [s.label for s in report.beacons_seen] == ["start", "end"]
+    assert report.beacons_seen[0].token == first.token
+    assert report.beacons_seen[0].index == 0
+    assert report.beacons_missing == []
+    assert report.packets_observed == 3
+    assert report.packets_stored == 1
+    assert report.window_complete is True
+    assert first.iface == "veth0"
+    assert first.netns is None
+
+
+async def test_a_beacon_the_capture_did_not_see_makes_the_window_incomplete(
+    backend: Backend,
+) -> None:
+    asserter = PCAPAsserter("veth0")
+    await asserter.start()
+    with patch.object(sniffer._beacons, "send", _fake_sender(backend, deliver=False)):
+        await asserter.mark("start")
+    await asserter.stop()  # healthy, so no error: the window is what is not vouched for
+    report = await asserter.stop_report()
+    assert report.instrument_healthy
+    assert report.beacons_missing == ["start"]
+    assert report.window_complete is False
+
+
+async def test_a_beacon_sent_by_a_sandbox_is_expected_too(backend: Backend) -> None:
+    asserter = PCAPAsserter("veth0")
+    await asserter.start()
+    send = _fake_sender(backend)
+
+    class Sandbox:
+        async def beacon(self, label: str) -> Any:
+            return await send("vrh-x", "nse_x", label)
+
+    beacon = await asserter.mark("via", via=Sandbox())
+    other = await send("vrh-x", "nse_x", "other")
+    asserter.expect(other)
+    await asserter.stop()
+    report = await asserter.stop_report()
+    assert beacon.netns == "nse_x"
+    assert [b.label for b in report.beacons_expected] == ["via", "other"]
+    assert report.window_complete is True
+    with pytest.raises(CaptureStateError, match="already stopped"):
+        asserter.expect(other)
+
+
+async def test_mark_is_refused_where_a_beacon_cannot_prove_anything(backend: Backend) -> None:
+    asserter = PCAPAsserter("veth0", filter="udp")
+    with pytest.raises(CaptureStateError, match="not running"):
+        await asserter.mark("early")
+    await asserter.start()
+    with pytest.raises(CaptureStateError, match="beacons=True"):
+        await asserter.mark("filtered")
+    await asserter.stop()
+
+    backend.socket = FakeSocket()
+    backend.hardware_type = 65534
+    raw_ip = PCAPAsserter("tun0")
+    await raw_ip.start()
+    with pytest.raises(CaptureStateError, match="not on an Ethernet link"):
+        await raw_ip.mark("tun")
+    await raw_ip.stop()
+
+
+async def test_beacons_true_admits_beacons_through_a_custom_filter(backend: Backend) -> None:
+    asserter = PCAPAsserter("veth0", filter="udp port 53", beacons=True)
+    assert asserter.filter == f"(({DEFAULT_FILTER}) and (udp port 53)) or (ether proto 0x88b5)"
+    await asserter.start()
+    assert backend.bpf == asserter.filter
+    with patch.object(sniffer._beacons, "send", _fake_sender(backend)):
+        await asserter.mark("ok")
+    await asserter.stop()
+    assert (await asserter.stop_report()).window_complete is True
+    assert PCAPAsserter("veth0", beacons=True).filter == DEFAULT_FILTER
+
+
+async def test_beacon_frames_are_written_to_the_file(backend: Backend, tmp_path: Path) -> None:
+    out = tmp_path / "beacons.pcap"
+    asserter = PCAPAsserter("veth0", output=out)
+    await asserter.start()
+    frame = _beacon_frame("w", "ab" * 16)
+    backend.socket.send(frame)
+    await asserter.stop()
+    assert _pcap_payloads(out) == [frame]
+    assert (await asserter.stop_report()).beacons_seen[0].label == "w"
+
+
+@pytest.mark.parametrize(
+    ("hardware_type", "link_type"), [(1, 1), (772, 1), (65534, 101), (999, None), (None, None)]
+)
+async def test_the_report_names_the_link(
+    backend: Backend, hardware_type: int | None, link_type: int | None
+) -> None:
+    backend.hardware_type = hardware_type
+    asserter = PCAPAsserter("veth0")
+    await asserter.start()
+    await asserter.stop()
+    report = await asserter.stop_report()
+    assert report.hardware_type == hardware_type
+    assert report.link_type == link_type
+    assert report.snaplen == 65535
+    assert report.required_bytes is None
+    assert report.snaplen_sufficient is None
+
+
+async def test_required_bytes_beyond_the_snaplen_is_never_complete(backend: Backend) -> None:
+    with patch("scapy.data.MTU", 64):
+        short = PCAPAsserter("veth0", required_bytes=100)
+        await short.start()
+        backend.socket.send(b"x" * 64)
+        backend.socket.send(b"y" * 10)
+        await short.stop()
+    report = await short.stop_report()
+    assert report.snaplen == 64
+    assert report.packets_truncated == 1
+    assert report.snaplen_sufficient is False
+    assert report.window_complete is False
+
+    backend.socket = FakeSocket()
+    enough = PCAPAsserter("veth0", required_bytes=1500)
+    await enough.start()
+    await enough.stop()
+    assert (await enough.stop_report()).snaplen_sufficient is True
+    assert (await enough.stop_report()).window_complete is True
+    with pytest.raises(ValueError, match="required_bytes"):
+        PCAPAsserter("veth0", required_bytes=0)
+
+
+async def test_hardware_type_is_read_from_the_bound_socket() -> None:
+    class Bound:
+        class ins:
+            @staticmethod
+            def getsockname() -> tuple[Any, ...]:
+                return ("veth0", 3, 0, 772, b"")
+
+    class Unbound:
+        class ins:
+            @staticmethod
+            def getsockname() -> str:
+                return ""
+
+    assert sniffer._hardware_type(Bound()) == 772
+    assert sniffer._hardware_type(Unbound()) is None

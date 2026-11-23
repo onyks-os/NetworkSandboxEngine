@@ -45,6 +45,7 @@ from nse.models.network_config import GatewayNetwork, SimpleNetwork
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from nse.models.capture_report import Beacon
     from nse.models.process import ProcessIdentity, ProcessResult
     from nse.models.test_request import TestRequest
     from nse.models.trace_event import TraceEvent
@@ -261,6 +262,19 @@ class NamespaceSandbox:
             self.peer_iface,
             self.ext_netns,
         )
+
+    async def beacon(self, label: str) -> Beacon:
+        """Send a beacon frame from this sandbox's end of its link.
+
+        The frame leaves :attr:`peer_iface` inside the sandbox and crosses the
+        veth to :attr:`ext_iface`, where a capture sees it. Register it with
+        :meth:`PCAPAsserter.expect <nse.core.sniffer.PCAPAsserter.expect>`, or
+        send it with ``asserter.mark(label, via=sandbox)``, which does both.
+        Raises ``OSError`` if the frame cannot be sent (no ``CAP_NET_RAW``).
+        """
+        from nse.core import beacons
+
+        return await beacons.send(self.peer_iface, self.name, label)
 
 
 class NetnsController:

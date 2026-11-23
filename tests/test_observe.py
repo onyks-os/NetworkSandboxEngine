@@ -274,3 +274,177 @@ def test_one_capture_can_hold_a_probe_and_its_control() -> None:
     assert stimuli.requests_in(control, window) == [control_request]
     assert stimuli.replies_in(_result(), window) == [REPLY]
     assert stimuli.replies_in(control, window) == []
+
+
+# --------------------------------------------------------------------------- one window, a canary
+
+CANARY = "cafecafecafecafecafecafe"
+
+
+def _canary_result(**fields: Any) -> StimulusResult:
+    base: dict[str, Any] = {
+        "kind": "udp",
+        "probe_id": CANARY,
+        "destination": Endpoint(address="10.0.1.1", port=7777),
+        "payload": probe_packets.marker(CANARY),
+        "outcome": "sent",
+        "reply": None,
+        "reply_source": None,
+    }
+    base.update(fields)
+    return _result(**base)
+
+
+CANARY_PACKET = Ether(
+    bytes(
+        Ether()
+        / IP(src="10.0.1.2", dst="10.0.1.1")
+        / UDP(sport=40001, dport=7777)
+        / Raw(probe_packets.marker(CANARY))
+    )
+)
+
+
+@pytest.mark.asyncio
+async def test_a_seen_canary_lets_an_absence_be_false(capture: SimpleNamespace) -> None:
+    capture.packets = [CANARY_PACKET]
+    canary = FakeStimulus(_canary_result())
+    stimulus = FakeStimulus(_result(outcome="sent", reply=None))
+    seen = await stimuli.observe(SANDBOX, stimulus, canary=canary, settle=0)  # type: ignore[arg-type]
+    assert seen.on_wire is False
+    assert seen.canary is not None
+    assert seen.canary.on_wire is True
+    assert "canary: seen" in seen.describe()
+
+
+@pytest.mark.asyncio
+async def test_an_unseen_canary_makes_every_absence_unknown(capture: SimpleNamespace) -> None:
+    capture.packets = [REQUEST]  # the capture saw the stimulus but not the canary
+    stimulus = FakeStimulus(_result(outcome="sent", reply=None))
+    canary = FakeStimulus(_canary_result())
+    window = await stimuli.observe_window(
+        SANDBOX,  # type: ignore[arg-type]
+        [
+            stimulus,
+            FakeStimulus(
+                _result(
+                    probe_id="1" * 24,
+                    outcome="sent",
+                    source=Endpoint(address="10.0.1.2", port=40002),
+                )
+            ),
+        ],  # type: ignore[list-item]
+        canary=canary,  # type: ignore[arg-type]
+        identity=None,
+        settle=0,
+    )
+    assert window.canary_seen is False
+    assert not window.vouched
+    assert not window.conclusive
+    assert window[0].on_wire is True  # what was seen still counts
+    assert window[1].on_wire is None  # but no absence is vouched for
+    assert window[1].reply_on_wire is None
+    assert len(window) == 2
+    assert [o.result.probe_id for o in window] == [PROBE, "1" * 24]
+    assert "canary: NOT seen" in window[1].describe()
+    assert "vouched False" in window.describe()
+
+
+@pytest.mark.asyncio
+async def test_the_canary_runs_last_with_its_own_identity(capture: SimpleNamespace) -> None:
+    order: list[str] = []
+
+    class Recording(FakeStimulus):
+        def __init__(self, name: str, result: StimulusResult) -> None:
+            super().__init__(result)
+            self.name = name
+
+        async def run(self, sandbox: Any, **options: Any) -> StimulusResult:
+            order.append(self.name)
+            return await super().run(sandbox, **options)
+
+    first, second = Recording("a", _result()), Recording("b", _result(probe_id="2" * 24))
+    canary = Recording("canary", _canary_result())
+    identity, other = object(), object()
+    await stimuli.observe_window(
+        SANDBOX,  # type: ignore[arg-type]
+        [first, second],  # type: ignore[list-item]
+        canary=canary,  # type: ignore[arg-type]
+        identity=identity,  # type: ignore[arg-type]
+        canary_identity=other,  # type: ignore[arg-type]
+        settle=0,
+    )
+    assert order == ["a", "b", "canary"]
+    assert first.calls[0]["identity"] is identity
+    assert canary.calls[0]["identity"] is other
+    assert capture.started == capture.reported == 1  # one window for all of them
+
+    default = Recording("canary", _canary_result())
+    await stimuli.observe(SANDBOX, first, canary=default, identity=identity, settle=0)  # type: ignore[arg-type]
+    assert default.calls[0]["identity"] is identity
+
+
+@pytest.mark.asyncio
+async def test_a_window_collects_every_contradiction(capture: SimpleNamespace) -> None:
+    receiver = FakeReceiver(ReceiptLog(receipts=(_receipt(),), complete=True))
+    capture.packets = [CANARY_PACKET]
+    window = await stimuli.observe_window(
+        SANDBOX,  # type: ignore[arg-type]
+        [FakeStimulus(_result())],  # type: ignore[list-item]
+        canary=FakeStimulus(_canary_result()),  # type: ignore[arg-type]
+        receiver=receiver,  # type: ignore[arg-type]
+        settle=0,
+    )
+    assert window.vouched
+    assert window.contradictions()[0].startswith(f"udp_round_trip {PROBE}: the receiver")
+    assert not window.conclusive
+    with pytest.raises(ValueError, match="at least one"):
+        await stimuli.observe_window(SANDBOX, [], settle=0)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_without_a_canary_a_window_is_vouched_by_the_capture_alone(
+    capture: SimpleNamespace,
+) -> None:
+    window = await stimuli.observe_window(
+        SANDBOX,  # type: ignore[arg-type]
+        [FakeStimulus(_result(outcome="sent", reply=None))],  # type: ignore[list-item]
+        settle=0,
+    )
+    assert window.canary is None
+    assert window.canary_seen is None
+    assert window.vouched
+    assert window.conclusive
+    assert window[0].on_wire is False
+
+
+DNAT_REQUEST = Ether(
+    bytes(
+        Ether()
+        / IP(src="10.0.1.2", dst="192.0.2.9")
+        / UDP(sport=40000, dport=5353)
+        / Raw(probe_packets.marker(PROBE))
+    )
+)
+DNAT_REPLY = Ether(
+    bytes(
+        Ether()
+        / IP(src="192.0.2.9", dst="10.0.1.2")
+        / UDP(sport=5353, dport=40000)
+        / Raw(probe_packets.marker(PROBE))
+    )
+)
+
+
+@pytest.mark.asyncio
+async def test_nat_recognises_a_probe_whose_destination_was_rewritten(
+    capture: SimpleNamespace,
+) -> None:
+    capture.packets = [DNAT_REQUEST, DNAT_REPLY]
+    stimulus = FakeStimulus(_result())
+    strict = await stimuli.observe(SANDBOX, stimulus, settle=0)  # type: ignore[arg-type]
+    assert strict.on_wire is False  # 2.4.0 behaviour: the destination must match
+    rewritten = await stimuli.observe(SANDBOX, stimulus, settle=0, nat=True)  # type: ignore[arg-type]
+    assert rewritten.requests == (DNAT_REQUEST,)
+    assert rewritten.replies == (DNAT_REPLY,)
+    assert rewritten.requests[0][IP].dst == "192.0.2.9"  # where it really went

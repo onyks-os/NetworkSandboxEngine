@@ -22,6 +22,15 @@ send; this program performs the socket calls and prints **one** JSON line:
 Anything else (a bad plan, a bug) raises and exits non-zero, which NSE reports
 as ``could_not_run`` too: a broken probe is never mistaken for a blocked one.
 
+With a ``stream`` section in the plan it sends the same stimulus at a fixed
+rate instead, one attempt per period, each in its own thread so a slow attempt
+does not delay the next. It prints ``{"event": "started"}``, then one
+``attempt`` line per attempt (the report above plus ``seq``, ``probe_id`` and
+``started_monotonic``), and on SIGTERM, or when ``count`` or ``duration`` is
+reached, waits for the attempts in flight and prints ``{"event": "end"}`` with
+the number of attempts started. Attempt *n* carries probe ID
+``prefix + "%08x" % n``, substituted for the template's ID in the payload.
+
 Standard library only: this runs as the identity under test, which may not be
 able to read NSE's installation.
 """
@@ -31,8 +40,10 @@ from __future__ import annotations
 import contextlib
 import errno
 import json
+import signal
 import socket
 import sys
+import threading
 import time
 from typing import Any
 
@@ -285,8 +296,105 @@ def _read_exactly(sock: socket.socket, size: int) -> bytes:
     return data
 
 
+def _checksum(data: bytes) -> int:
+    if len(data) % 2:
+        data += b"\x00"
+    total = sum(int.from_bytes(data[i : i + 2], "big") for i in range(0, len(data), 2))
+    while total >> 16:
+        total = (total & 0xFFFF) + (total >> 16)
+    return ~total & 0xFFFF
+
+
+class Stream:
+    """The plan's stimulus, once per period, until stopped or a bound is reached."""
+
+    def __init__(self, plan: dict[str, Any]) -> None:
+        self.plan = plan
+        self.stream = plan["stream"]
+        self.template = bytes.fromhex(plan["payload"])
+        self.template_id = self.stream["template_id"]
+        self.stop = threading.Event()
+        self.lock = threading.Lock()
+        self.threads: list[threading.Thread] = []
+
+    def probe_id(self, seq: int) -> str:
+        return f"{self.stream['prefix']}{seq:08x}"
+
+    def payload(self, probe_id: str) -> bytes:
+        old, new = self.template_id, probe_id
+        data = self.template.replace(old.encode(), new.encode())
+        data = data.replace(bytes.fromhex(old), bytes.fromhex(new))
+        if self.plan["transport"] == "icmp" and self.plan["family"] == 4 and len(data) >= 4:
+            data = data[:2] + b"\x00\x00" + data[4:]
+            data = data[:2] + _checksum(data).to_bytes(2, "big") + data[4:]
+        return data
+
+    def attempt_plan(self, seq: int, probe_id: str) -> dict[str, Any]:
+        plan = dict(self.plan)
+        plan.pop("stream")
+        plan["payload"] = self.payload(probe_id).hex()
+        base = plan.get("source_port")
+        if base is not None:
+            plan["source_port"] = 1024 + (int(base) - 1024 + seq - 1) % (65536 - 1024)
+        return plan
+
+    def attempt(self, seq: int, started: float) -> None:
+        probe_id = self.probe_id(seq)
+        try:
+            report = Probe(self.attempt_plan(seq, probe_id)).run()
+        except Exception as exc:  # a bug in one attempt must not end the stream silently
+            report = {"outcome": "could_not_run", "stage": None, "error": repr(exc)}
+        report.update(event="attempt", seq=seq, probe_id=probe_id, started_monotonic=started)
+        with self.lock:
+            print(json.dumps(report), flush=True)
+
+    def run(self) -> int:
+        period = float(self.stream["period"])
+        count = self.stream.get("count")
+        duration = self.stream.get("duration")
+        limit = int(self.stream.get("max_in_flight", 256))
+        signal.signal(signal.SIGTERM, lambda *_: self.stop.set())
+        start = time.monotonic()
+        with self.lock:
+            print(json.dumps({"event": "started", "monotonic": start}), flush=True)
+        # Slots are the schedule; seq numbers the attempts actually started. A
+        # slot that cannot be used (too many attempts in flight, or the process
+        # was not scheduled in time) is skipped, never made up for later: it
+        # shows as a gap between started_monotonic values, not as a burst.
+        seq, slot, reason = 0, 0, "stopped"
+        while not self.stop.is_set():
+            if count is not None and seq >= int(count):
+                reason = "count"
+                break
+            due = start + slot * period
+            if duration is not None and slot * period >= float(duration):
+                reason = "duration"
+                break
+            delay = due - time.monotonic()
+            if delay > 0 and self.stop.wait(delay):
+                break
+            if delay < -period:  # late by more than a period: resume on schedule
+                slot = int((time.monotonic() - start) / period)
+                continue
+            slot += 1
+            self.threads = [t for t in self.threads if t.is_alive()]
+            if len(self.threads) >= limit:
+                continue
+            seq += 1
+            thread = threading.Thread(target=self.attempt, args=(seq, time.monotonic()))
+            thread.start()
+            self.threads.append(thread)
+        for thread in self.threads:
+            thread.join()
+        with self.lock:
+            print(json.dumps({"event": "end", "attempts": seq, "reason": reason}), flush=True)
+        return 0
+
+
 def main(argv: list[str]) -> int:
     plan = json.loads(argv[1])
+    if plan.get("stream"):
+        return Stream(plan).run()
     print(json.dumps(Probe(plan).run()), flush=True)
     return 0
 
