@@ -1,6 +1,7 @@
 """Keep test ownership journals isolated from the machine's real NSE state."""
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -40,3 +41,31 @@ def resource_kernel(monkeypatch: pytest.MonkeyPatch) -> None:
         return Inspection("owned", resource.name, resource.netns)
 
     monkeypatch.setattr(NetworkResources, "inspect", inspect)
+
+
+class LocalSandbox:
+    """A stand-in sandbox that runs programs in the test's own namespace.
+
+    It goes through the real launch chain (identity handshake, output capture,
+    process-group stop), so stimuli and receivers run exactly as they do in a
+    namespace, on loopback, without privileges. The namespace identity is a
+    placeholder: NSE refuses to signal its own namespace, and no other process
+    is in this one, so only the managed process group is ever signalled.
+    """
+
+    ext_iface = "lo"
+    ext_netns = None
+
+    async def start_process(self, argv: Any, **options: Any) -> Any:
+        from nse.core.process import spawn_process
+
+        return await spawn_process([], argv, netns=(1, 1), **options)
+
+    async def run_process(self, argv: Any, *, timeout: float | None = None, **options: Any) -> Any:
+        process = await self.start_process(argv, **options)
+        return await process.wait(timeout)
+
+
+@pytest.fixture
+def local_sandbox() -> LocalSandbox:
+    return LocalSandbox()

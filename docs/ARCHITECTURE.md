@@ -20,7 +20,11 @@ NetworkSandboxEngine/
 |
 |-- nse/                        # PyPI wheel (only this directory is packaged)
 |   |-- __init__.py             # Public API: NetnsController, PCAPAsserter, CaptureReport, CaptureLimits, Capture*Error
+|   |-- stimuli.py              # Stimulus, observe(): real sockets as a chosen identity, four facts
+|   |-- receivers.py            # Controlled receivers: UDP/TCP echo, DNS, STUN, with a receipt log
+|   |-- _agents/                # Stdlib programs run inside namespaces (stimulus, receiver)
 |   |-- core/
+|   |   |-- probe_packets.py    # Probe IDs, DNS/STUN/QUIC/ICMP bytes, finding a probe in a capture
 |   |   |-- naming.py           # Uniform netns/veth derive_names() and sweep rules
 |   |   |-- host_firewall.py    # Warns when the host's input hooks may filter the host endpoint
 |   |   |-- netns_controller.py # Namespace lifecycle, veth wiring, and startup sweep
@@ -39,6 +43,7 @@ NetworkSandboxEngine/
 |   |   |-- artifacts.py        # ArtifactEntry, SHA-256 hashing, atomic report writes
 |   |   |-- experiment_report.py # ExperimentReport: input, environment, result, observations, run
 |   |   |-- process.py          # ProcessIdentity, EffectiveIdentity, ProcessResult
+|   |   |-- stimulus.py         # StimulusResult, Receipt, ReceiptLog, Endpoint
 |   |   |-- test_request.py     # PacketSpec, TestRequest, TopologyType
 |   |   `-- trace_event.py      # TraceEvent model
 |   `-- cli/
@@ -157,6 +162,30 @@ Executing:
 Canary trace ids are stripped from the returned event list, so probes never
 appear in a caller's verdict stream. See
 [The Verdict Oracle](web/explanation/deterministic-oracle.md).
+
+### 3.5 Stimuli and receivers (`nse/stimuli.py`, `nse/receivers.py`)
+
+Traffic for `output`-hook rules has to come from a socket owned by the identity
+under test, so these run as programs inside the namespace rather than as
+injected frames.
+
+- Each stimulus and receiver is a standard-library script in `nse/_agents/`,
+  run as `python -I -S -c <source> <json plan>` through `run_process()` /
+  `start_process()`, so identity, timeouts and process-tree cleanup are those
+  of managed processes. The script prints one JSON report (stimulus) or JSON
+  lines (`ready`, then one `receipt` per arrival, numbered from 1).
+- `StimulusResult.outcome` is one of `sent`, `answered`, `no_reply`,
+  `refused`, `could_not_run`, never folded together. Failing to create or
+  bind the socket is `could_not_run`, because no packet can have been produced.
+- Every stimulus carries a probe ID; a bare SYN binds its own source port
+  instead. `nse/core/probe_packets.py` builds the bytes and finds a result's
+  request and reply in a capture.
+- A receiver's log is complete only if every sequence number arrived, no
+  output was dropped and it was stopped rather than exiting on its own.
+- `observe()` runs one stimulus inside one `PCAPAsserter` window and reports
+  `on_wire`, `received` and `reply_on_wire` as `True`, `False` or `None`
+  (the instrument cannot vouch for the absence). `Observation.contradictions()`
+  names combinations that mean an instrument is blind.
 
 ---
 

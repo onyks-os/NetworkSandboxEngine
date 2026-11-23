@@ -12,6 +12,9 @@ from .core.sniffer import CaptureError, CaptureStartError, CaptureStateError, PC
 from .models.capture_report import CaptureLimits, CaptureReport
 from .models.experiment_report import ExperimentReport, PositiveControl
 from .models.process import EffectiveIdentity, ProcessIdentity, ProcessResult
+from .models.stimulus import Endpoint, Receipt, ReceiptLog, StimulusResult
+from .receivers import Receiver, ReceiverSpec, ReceiverStartError
+from .stimuli import Observation, Stimulus, observe
 
 try:
     # Read the version from installed metadata rather than restating it here.
@@ -28,15 +31,25 @@ __all__ = [
     "CaptureStartError",
     "CaptureStateError",
     "EffectiveIdentity",
+    "Endpoint",
     "ExperimentReport",
     "IdentityError",
     "ManagedProcess",
     "NetnsController",
+    "Observation",
     "PCAPAsserter",
     "PositiveControl",
     "ProcessExitedError",
     "ProcessIdentity",
     "ProcessResult",
     "ProcessStartError",
+    "Receipt",
+    "ReceiptLog",
+    "Receiver",
+    "ReceiverSpec",
+    "ReceiverStartError",
+    "Stimulus",
+    "StimulusResult",
     "__version__",
+    "observe",
 ]

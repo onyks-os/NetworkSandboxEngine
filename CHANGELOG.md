@@ -10,6 +10,69 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Thi
 
 ---
 
+## [2.4.0] - 2026-11-23
+
+Stimuli from a real user, controlled receivers, and observations that keep
+each fact apart. A firewall filters locally generated traffic by the identity
+of the socket that sent it, which packet injection cannot reproduce. NSE now
+sends traffic from a process running as a chosen UID/GID inside the sandbox,
+runs known servers that log every arrival, and reports what the process, the
+capture and the receiver each saw, saying "unknown" whenever an instrument
+cannot vouch for an absence. Everything is opt-in; code written against 2.3.0
+keeps working unchanged.
+
+### Added
+
+- **`nse.stimuli`**: UDP send, UDP round trip, TCP connect (a bare SYN), TCP
+  round trip, ICMP and ICMPv6 echo, a DNS query over UDP or TCP for a unique
+  name, a 1200-byte UDP datagram shaped like a QUIC Initial, and a STUN
+  Binding Request, on IPv4 and IPv6. `await stimulus.run(sandbox,
+  identity=ProcessIdentity(...))` runs a standard-library program through
+  `run_process()` and returns a `StimulusResult`.
+- **Typed outcomes, never folded together**: `sent`, `answered`, `no_reply`
+  (only for a stimulus that waits), `refused` with the errno and the socket
+  call that failed (`connect`, `send`, `receive`), and `could_not_run` when no
+  packet can have been produced: no interpreter, an identity that cannot be
+  applied, a socket that cannot be created (a raw socket without
+  `CAP_NET_RAW`) or bound, or a program with no report. `run()` never raises
+  for a failure of the stimulus itself.
+- **Probe IDs**: every run carries a new ID in the packet (payload, DNS name,
+  STUN transaction ID, QUIC connection ID). A bare SYN binds a distinct source
+  port instead, and the result records the source address and port.
+- **`nse.receivers`**: UDP echo, TCP accept-and-echo, DNS with fixed A/AAAA
+  answers and the modes `answer`, `drop`, `servfail` and `refused` on UDP and
+  TCP, and STUN returning XOR-MAPPED-ADDRESS. `start()` returns once every
+  socket is bound and raises `ReceiverStartError` if one cannot be.
+- **Receipt logs**: every arrival is logged before it is answered, with its
+  sequence number, probe ID, source, destination, family, transport and
+  monotonic and wall time. `ReceiptLog.complete` is `False`, with the reasons,
+  on a missing sequence number, an unreadable or cut line, dropped output, or a
+  receiver that exited on its own.
+- **`nse.observe()`** runs one stimulus inside a capture window, optionally
+  with a receiver, and returns an `Observation` with `sent`, `on_wire`,
+  `received` and `reply_on_wire` kept apart. A fact the capture or the log
+  cannot vouch for is `None`, never `False`. `contradictions()` names
+  combinations that mean an instrument is blind, such as a probe the receiver
+  logged but the capture did not see, and `describe()` includes them.
+- `nse.stimuli.requests_in()` and `replies_in()` find a result's packets in a
+  capture that holds several stimuli.
+- `ManagedProcess.output_dropped()` says how many bytes of a stream were
+  dropped past `max_output_bytes`.
+- The new names are exported from `nse`: `Stimulus`, `StimulusResult`,
+  `Observation`, `observe`, `Receiver`, `ReceiverSpec`, `ReceiverStartError`,
+  `Receipt`, `ReceiptLog` and `Endpoint`.
+- Documentation: [sending traffic as a user](https://onyks-os.github.io/nse/how-to/stimuli/),
+  [controlled receivers](https://onyks-os.github.io/nse/how-to/receivers/) and
+  [observing a stimulus](https://onyks-os.github.io/nse/how-to/observing-a-stimulus/).
+
+### Notes
+
+- A TCP SYN dropped by an `output` rule does not fail `connect()`: the kernel
+  retransmits it, and the stimulus reports `no_reply` at `connect`. Only the
+  capture can tell that it never left; use `observe()` for that claim.
+
+---
+
 ## [2.3.0] - 2026-11-21
 
 The host endpoint without the host's firewall. In the simple topology,

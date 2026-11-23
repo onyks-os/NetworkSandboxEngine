@@ -48,6 +48,7 @@ Key architectural properties:
 * **The host firewall is never touched**: the ruleset under test is loaded only inside the sandbox namespaces. What a run does create on the host is temporary and declared; see [What a run changes on the host](#what-a-run-changes-on-the-host).
 * **Self-verifying Oracle**: Every run injects a *canary* packet before the test packets and again after them, and reports a result only if the kernel trace for both was observed. See [The oracle contract](#the-oracle-contract).
 * **Dual-Stack and Topologies**: Native support for IPv4 and IPv6 traffic, plus multi-namespace Gateway topologies for router, NAT, and forwarding ruleset validation.
+* **Traffic from a real user, observed four ways**: `nse.stimuli` sends UDP, TCP, ICMP, DNS, QUIC-shaped and STUN traffic from a socket in a process running as a chosen UID/GID, so `output`-hook rules on `skuid`/`skgid` are tested as they run. `nse.receivers` are known servers that log every arrival. `nse.observe()` reports sent, on the wire, received and reply seen as separate facts, and "unknown" whenever the capture or the log cannot vouch for an absence. See [stimuli](https://onyks-os.github.io/nse/how-to/stimuli/), [receivers](https://onyks-os.github.io/nse/how-to/receivers/) and [observing a stimulus](https://onyks-os.github.io/nse/how-to/observing-a-stimulus/).
 * **Small, auditable surface**: One package, no web server, no JavaScript, with 98% test coverage enforced by a ratchet.
 
 ### What a run changes on the host

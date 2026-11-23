@@ -468,6 +468,10 @@ class ManagedProcess:
         """What has been captured from *stream* so far."""
         return bytes(self._capture(stream).data)
 
+    def output_dropped(self, stream: Stream = "stdout") -> int:
+        """Bytes of *stream* discarded so far because the capture limit was reached."""
+        return self._capture(stream).dropped
+
     def _capture(self, stream: Stream) -> _Capture:
         try:
             return self._captures[stream]
