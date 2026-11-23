@@ -95,6 +95,9 @@ nav:
       - Worked Examples: tutorials/examples.md
   - How-To Guides:
       - Embedding NSE in Python: how-to/in-process-integration.md
+      - Sending Traffic as a User: how-to/stimuli.md
+      - Controlled Receivers: how-to/receivers.md
+      - Observing a Stimulus: how-to/observing-a-stimulus.md
       - Custom Packet Specs: how-to/custom-packets.md
       - CI/CD Automation: how-to/cicd-setup.md
   - Explanation:

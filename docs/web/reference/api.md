@@ -57,6 +57,41 @@ from `nse`. See
 
 ---
 
+## Stimuli and Observation
+
+Real sockets in a process running as a chosen identity, and `observe()`, which
+keeps sent, on the wire, received and reply seen apart. See
+[stimuli](../how-to/stimuli.md) and
+[observing a stimulus](../how-to/observing-a-stimulus.md).
+
+::: nse.stimuli
+    options:
+      show_root_heading: true
+      show_source: true
+
+::: nse.models.stimulus
+    options:
+      show_root_heading: true
+      show_source: true
+
+::: nse.core.probe_packets
+    options:
+      show_root_heading: true
+      show_source: true
+
+---
+
+## Controlled Receivers
+
+See [controlled receivers](../how-to/receivers.md).
+
+::: nse.receivers
+    options:
+      show_root_heading: true
+      show_source: true
+
+---
+
 ## Rule Engine
 
 ::: nse.core.rule_engine
