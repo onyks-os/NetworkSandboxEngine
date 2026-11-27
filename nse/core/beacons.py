@@ -17,56 +17,50 @@ changes namespace. Sending needs ``CAP_NET_RAW`` there, as capturing does.
 
 from __future__ import annotations
 
+import json
 import secrets
 import socket
 import threading
 import time
 
+from nse import _agents
 from nse.core.async_work import run_blocking
 from nse.core.utils import enter_netns
-from nse.models.capture_report import Beacon
 
-ETHERTYPE = 0x88B5
-MAGIC = b"NSE-BEACON"
-VERSION = 1
-#: A BPF expression that admits beacon frames; OR it into a custom filter.
-FILTER = f"ether proto 0x{ETHERTYPE:04x}"
-MAX_LABEL_BYTES = 64
+# The frame format lives in nse.formats.beacon, a leaf the models can use too.
+from nse.formats.beacon import (
+    CLOCKED_VERSION,
+    ETHERTYPE,
+    FILTER,
+    MAGIC,
+    MAX_LABEL_BYTES,
+    VERSION,
+    BeaconFrame,
+    clocked_frame,
+    decode,
+    frame,
+    parse,
+)
+from nse.formats.beacon import TOKEN_BYTES as _TOKEN_BYTES
+from nse.models.capture_report import Beacon, SenderClock
 
-_HEADER = 14
-_MIN_FRAME = 60  # Ethernet minimum without the FCS
-_TOKEN_BYTES = 16
-
-
-def frame(label: str, token: str, source_mac: bytes = bytes(6)) -> bytes:
-    """The bytes of a beacon frame for *label* and *token* (32 hex digits)."""
-    encoded = label.encode()
-    if len(encoded) > MAX_LABEL_BYTES:
-        raise ValueError(f"a beacon label is at most {MAX_LABEL_BYTES} bytes")
-    raw_token = bytes.fromhex(token)
-    if len(raw_token) != _TOKEN_BYTES:
-        raise ValueError("a beacon token is 32 hex digits")
-    body = MAGIC + bytes([VERSION, len(encoded)]) + raw_token + encoded
-    data = b"\xff" * 6 + source_mac + ETHERTYPE.to_bytes(2, "big") + body
-    return data.ljust(_MIN_FRAME, b"\x00")
-
-
-def parse(raw: bytes) -> tuple[str, str] | None:
-    """``(token, label)`` if *raw* is a beacon frame, else None."""
-    if len(raw) < _HEADER + len(MAGIC) + 2 + _TOKEN_BYTES:
-        return None
-    if raw[12:14] != ETHERTYPE.to_bytes(2, "big"):
-        return None
-    body = raw[_HEADER:]
-    if not body.startswith(MAGIC) or body[len(MAGIC)] != VERSION:
-        return None
-    size = body[len(MAGIC) + 1]
-    start = len(MAGIC) + 2
-    token = body[start : start + _TOKEN_BYTES]
-    label = body[start + _TOKEN_BYTES : start + _TOKEN_BYTES + size]
-    if len(label) != size:
-        return None
-    return token.hex(), label.decode(errors="replace")
+__all__ = [
+    "CLOCKED_VERSION",
+    "ETHERTYPE",
+    "FILTER",
+    "MAGIC",
+    "MAX_LABEL_BYTES",
+    "VERSION",
+    "BeaconFrame",
+    "agent_command",
+    "agent_report",
+    "clocked_frame",
+    "decode",
+    "frame",
+    "parse",
+    "send",
+    "send_blocking",
+]
 
 
 def _send_here(iface: str, data: bytes) -> bytes:
@@ -114,3 +108,47 @@ def send_blocking(iface: str, netns: str | None, label: str) -> Beacon:
 async def send(iface: str, netns: str | None, label: str) -> Beacon:
     """Send one beacon without blocking the event loop."""
     return await run_blocking(send_blocking, iface, netns, label)
+
+
+def agent_command(iface: str, label: str, *, python: str = "python3") -> tuple[list[str], str]:
+    """The command line of the portable beacon agent, and the token its beacon will carry.
+
+    Run it as root wherever *iface* is, a VM over ssh for instance: it sends a
+    clocked beacon and its follow-up, and prints what it sent. Hand that output
+    to :func:`agent_report` to get the :class:`Beacon` a capture should expect.
+    """
+    frame(label, "0" * 32)  # validates the label here rather than on the far side
+    token = secrets.token_hex(_TOKEN_BYTES)
+    plan = json.dumps({"iface": iface, "label": label, "token": token})
+    return [python, "-I", "-S", "-c", _agents.source("beacon"), plan], token
+
+
+def agent_report(output: bytes | str) -> Beacon:
+    """The beacon the agent says it sent; ``ValueError`` if it did not send one."""
+    text = output.decode(errors="replace") if isinstance(output, bytes) else output
+    lines = [line for line in text.splitlines() if line.strip()]
+    if not lines:
+        raise ValueError("the beacon agent printed nothing")
+    try:
+        event = json.loads(lines[-1])
+        if event.get("event") == "error":
+            raise ValueError(f"the beacon agent could not send: {event.get('error')}")
+        if event.get("event") != "beacon":
+            raise ValueError(f"not a beacon agent report: {lines[-1][:200]!r}")
+        return Beacon(
+            label=str(event["label"]),
+            token=str(event["token"]),
+            iface=str(event["iface"]),
+            netns=None,
+            sent_at=float(event["sent_at"]),
+            sent_monotonic=float(event["monotonic_before"]),
+            clock=SenderClock(
+                boot_id=str(event["boot_id"]),
+                monotonic_before=float(event["monotonic_before"]),
+                boottime_before=float(event["boottime_before"]),
+                monotonic_after=float(event["monotonic_after"]),
+                boottime_after=float(event["boottime_after"]),
+            ),
+        )
+    except (KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"unreadable beacon agent report ({exc}): {lines[-1][:200]!r}") from None

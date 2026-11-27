@@ -24,9 +24,10 @@ as ``could_not_run`` too: a broken probe is never mistaken for a blocked one.
 
 With a ``stream`` section in the plan it sends the same stimulus at a fixed
 rate instead, one attempt per period, each in its own thread so a slow attempt
-does not delay the next. It prints ``{"event": "started"}``, then one
-``attempt`` line per attempt (the report above plus ``seq``, ``probe_id`` and
-``started_monotonic``), and on SIGTERM, or when ``count`` or ``duration`` is
+does not delay the next. It prints ``{"event": "started"}`` (with the
+machine's ``boot_id`` and both clocks), then one ``attempt`` line per attempt
+(the report above plus ``seq``, ``probe_id``, ``started_monotonic`` and
+``started_boottime``), and on SIGTERM, or when ``count`` or ``duration`` is
 reached, waits for the attempts in flight and prints ``{"event": "end"}`` with
 the number of attempts started. Attempt *n* carries probe ID
 ``prefix + "%08x" % n``, substituted for the template's ID in the payload.
@@ -360,13 +361,19 @@ class Stream:
                 break
         return report
 
-    def attempt(self, seq: int, started: float) -> None:
+    def attempt(self, seq: int, started: float, started_boottime: float | None = None) -> None:
         probe_id = self.probe_id(seq)
         try:
             report = self.probe(probe_id)
         except Exception as exc:  # a bug in one attempt must not end the stream silently
             report = {"outcome": "could_not_run", "stage": None, "error": repr(exc)}
-        report.update(event="attempt", seq=seq, probe_id=probe_id, started_monotonic=started)
+        report.update(
+            event="attempt",
+            seq=seq,
+            probe_id=probe_id,
+            started_monotonic=started,
+            started_boottime=started_boottime,
+        )
         with self.lock:
             print(json.dumps(report), flush=True)
 
@@ -377,8 +384,10 @@ class Stream:
         limit = int(self.stream.get("max_in_flight", 256))
         signal.signal(signal.SIGTERM, lambda *_: self.stop.set())
         start = time.monotonic()
+        started = {"event": "started", "monotonic": start, "boottime": _boottime()}
+        started["boot_id"] = _boot_id()
         with self.lock:
-            print(json.dumps({"event": "started", "monotonic": start}), flush=True)
+            print(json.dumps(started), flush=True)
         # Slots are the schedule; seq numbers the attempts actually started. A
         # slot that cannot be used (too many attempts in flight, or the process
         # was not scheduled in time) is skipped, never made up for later: it
@@ -403,7 +412,9 @@ class Stream:
             if len(self.threads) >= limit:
                 continue
             seq += 1
-            thread = threading.Thread(target=self.attempt, args=(seq, time.monotonic()))
+            thread = threading.Thread(
+                target=self.attempt, args=(seq, time.monotonic(), _boottime())
+            )
             thread.start()
             self.threads.append(thread)
         for thread in self.threads:
@@ -411,6 +422,21 @@ class Stream:
         with self.lock:
             print(json.dumps({"event": "end", "attempts": seq, "reason": reason}), flush=True)
         return 0
+
+
+def _boottime() -> float | None:
+    """CLOCK_BOOTTIME: like CLOCK_MONOTONIC, but it keeps counting while suspended."""
+    clock = getattr(time, "CLOCK_BOOTTIME", None)
+    return None if clock is None else time.clock_gettime(clock)
+
+
+def _boot_id() -> str | None:
+    """This boot's random ID: it changes on every reboot."""
+    try:
+        with open("/proc/sys/kernel/random/boot_id") as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
 
 
 def main(argv: list[str]) -> int:

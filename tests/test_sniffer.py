@@ -1196,3 +1196,28 @@ async def test_hardware_type_is_read_from_the_bound_socket() -> None:
 
     assert sniffer._hardware_type(Bound()) == 772
     assert sniffer._hardware_type(Unbound()) is None
+
+
+async def test_a_clocked_beacon_and_its_follow_up_are_one_sighting(backend: Backend) -> None:
+    from nse.formats import beacon as beacon_format
+
+    boot = "6f1c2b3a-4d5e-4f60-8a9b-0c1d2e3f4a5b"
+    token = "cd" * 16
+    asserter = PCAPAsserter("veth0")
+    await asserter.start()
+    backend.socket.send(
+        beacon_format.clocked_frame("vm", token, boot, 1_000_000_000, 2_000_000_000)
+    )
+    backend.socket.send(b"payload")
+    backend.socket.send(
+        beacon_format.clocked_frame("", token, boot, 1_000_001_000, 2_000_001_000, follow_up=True)
+    )
+    packets = await asserter.stop()
+    report = await asserter.stop_report()
+    assert [bytes(p) for p in packets] == [b"payload"]  # the follow-up is not a packet either
+    (sighting,) = report.beacons_seen
+    assert sighting.label == "vm"
+    assert sighting.clock is not None
+    assert sighting.clock.bracketed
+    assert sighting.clock.boottime_before == 2.0
+    assert sighting.clock.boottime_after == pytest.approx(2.000001)

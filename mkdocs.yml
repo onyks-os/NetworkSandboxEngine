@@ -101,6 +101,7 @@ nav:
       - Streams Through a Window: how-to/streams.md
       - Capture Beacons: how-to/beacons.md
       - Tracing a Process's Own Traffic: how-to/tracing-local-traffic.md
+      - Observing Outside the Sandbox: how-to/observing-outside-the-sandbox.md
       - Custom Packet Specs: how-to/custom-packets.md
       - CI/CD Automation: how-to/cicd-setup.md
   - Explanation:

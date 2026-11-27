@@ -108,6 +108,28 @@ Non-IP frames that prove a capture was reading across a window. See
       show_root_heading: true
       show_source: true
 
+::: nse.formats.beacon
+    options:
+      show_root_heading: true
+      show_source: true
+
+---
+
+## Clocks and External Captures
+
+Mapping a sender's clock onto a capture's, and reading pcap files NSE did not
+capture. See [observing outside the sandbox](../how-to/observing-outside-the-sandbox.md).
+
+::: nse.models.clock
+    options:
+      show_root_heading: true
+      show_source: true
+
+::: nse.formats.pcap
+    options:
+      show_root_heading: true
+      show_source: true
+
 ---
 
 ## Controlled Receivers

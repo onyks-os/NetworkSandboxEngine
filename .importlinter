@@ -15,3 +15,11 @@ type = forbidden
 source_modules = nse.models
 forbidden_modules = nse.core
                     nse.cli
+
+[importlinter:contract:formats-are-a-leaf]
+name = Formats depend on nothing else in NSE
+type = forbidden
+source_modules = nse.formats
+forbidden_modules = nse.core
+                    nse.models
+                    nse.cli
