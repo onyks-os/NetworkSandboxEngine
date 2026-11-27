@@ -293,6 +293,57 @@ async def test_cancelling_the_start_leaves_nothing_running(sandbox_env: dict[str
         await asyncio.wait_for(task, timeout=10)
 
 
+async def test_a_cancel_while_the_child_is_created_stops_what_it_started(
+    sandbox_env: dict[str, str],
+) -> None:
+    """The child exists before creation returns. A cancel in that window must
+    stop its whole group, not only the leader asyncio would kill."""
+    real = asyncio.create_subprocess_exec
+    created = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_create(*args: Any, **kwargs: Any) -> asyncio.subprocess.Process:
+        proc = await real(*args, **kwargs)
+        try:
+            created.set()
+            await release.wait()
+        except asyncio.CancelledError:
+            proc.kill()  # what asyncio does to a transport whose creation is cancelled
+            await proc.wait()
+            raise
+        return proc
+
+    # `; :` makes the shell fork sleep instead of becoming it, as dash does.
+    prefix = ["/bin/sh", "-c", "sleep 30; :", "chain"]
+    with patch.object(asyncio, "create_subprocess_exec", slow_create):
+        task = asyncio.ensure_future(spawn_process(prefix, ["true"], netns=FAKE, env=sandbox_env))
+        await asyncio.wait_for(created.wait(), 10)
+        assert await asyncio.to_thread(_wait_for, lambda: len(namespace_processes(FAKE)) == 2)
+        task.cancel()
+        asyncio.get_running_loop().call_later(0.2, release.set)
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=10)
+    assert namespace_processes(FAKE) == []
+
+
+async def test_a_cancelled_creation_that_failed_has_nothing_to_stop(
+    sandbox_env: dict[str, str],
+) -> None:
+    release = asyncio.Event()
+
+    async def failing_create(*args: Any, **kwargs: Any) -> asyncio.subprocess.Process:
+        await release.wait()
+        raise OSError("fork failed")
+
+    with patch.object(asyncio, "create_subprocess_exec", failing_create):
+        task = asyncio.ensure_future(spawn_process(["true"], ["true"], netns=FAKE, env=sandbox_env))
+        await asyncio.sleep(0.05)
+        task.cancel()
+        asyncio.get_running_loop().call_later(0.05, release.set)
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=10)
+
+
 async def test_an_identity_mismatch_never_runs_the_application(
     sandbox_env: dict[str, str], tmp_path: Path
 ) -> None:

@@ -23,6 +23,17 @@ DNAT (-100) and filter (0), so the trace flag is set before any of your chains
 sees the packet. By default it is off, and the trace is exactly what it was
 before.
 
+Every `load()` replaces the `nse_trace` table in the same transaction as your
+rules, so it never accumulates. Loading three times still traces each packet
+through one `meta nftrace set 1` per chain. A `load()` from an engine without
+`trace_output` removes the output chain an earlier `load()` added.
+
+!!! warning "`flush ruleset` turns tracing off"
+    NSE's trace table is loaded in front of your rules. A ruleset that starts
+    with `flush ruleset`, as many `nftables.conf` files do, deletes it again,
+    and nothing is traced at all. Remove that line, and call
+    `RuleEngine.flush(ns.name)` before `load()` if you need an empty ruleset.
+
 ---
 
 ## Proving the monitor is attached
@@ -81,7 +92,10 @@ canary a destination that nothing else in the test uses.
 
 An attempt that `could_not_run` is not a canary: it is listed in
 `readiness.problems`, and it never counts as proof. If the monitor died, its
-health errors are listed too.
+health errors are listed too. When readiness is not proven, the harvester also
+lists `nse_trace` in the namespace and says what is missing: the whole table
+(for example after a `flush ruleset`), the prerouting chain, or the output
+chain that `trace_output=True` adds.
 
 For a lower-level canary, call `harvester.prove_ready(send, predicate)` with
 your own `send` coroutine. It returns `None`, or the reason it could not send.
@@ -92,4 +106,5 @@ your own `send` coroutine. It returns `None`, or the reason it could not send.
 
 Without `trace_output=True`, a canary sent from inside the sandbox is never
 traced. `trace_ready()` then returns `ready=False` rather than an empty trace
-that looks like a pass. NSE's own tests run both cases.
+that looks like a pass, and `problems` names the missing output chain. NSE's
+own tests run both cases, and a ruleset that starts with `flush ruleset`.
