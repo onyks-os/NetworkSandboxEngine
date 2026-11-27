@@ -69,9 +69,22 @@ def sandbox_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, str]]:
     env = {**os.environ, key: value}
     yield env
     leftovers = namespace_processes(FAKE)
+    described = [_describe(pid) for pid in leftovers]  # before they are killed
     for pid in leftovers:
         os.kill(pid, signal.SIGKILL)
-    assert not leftovers, f"test left processes behind: {leftovers}"
+    assert not leftovers, f"test left processes behind: {described}"
+
+
+def _describe(pid: int) -> str:
+    """What a leftover process is: enough to tell a leak from one still dying."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").strip()
+    except OSError as exc:
+        return f"{pid} (gone: {exc})"
+    fields = stat[stat.rindex(")") + 2 :].split()  # after "pid (comm) "
+    state, ppid, pgid = fields[0], fields[1], fields[2]
+    return f"{pid} state={state} ppid={ppid} pgid={pgid} own_pid={os.getpid()} cmd={cmdline!r}"
 
 
 def _alive(pid: int) -> bool:
@@ -840,3 +853,16 @@ async def test_capabilities_are_always_stored_frozen() -> None:
     identity = ProcessIdentity(capabilities={"net_raw"})
     assert isinstance(identity.capabilities, frozenset)
     assert hash(identity)  # a frozen model stays hashable
+
+
+async def test_a_leftover_is_described_with_its_state_parent_and_group() -> None:
+    child = subprocess.Popen(["sleep", "30"])
+    try:
+        text = _describe(child.pid)
+    finally:
+        child.kill()
+        child.wait()
+    assert f"ppid={os.getpid()}" in text
+    assert "cmd=b'sleep 30'" in text
+    assert "state=" in text
+    assert "gone" in _describe(2**22 + 1)  # above pid_max: never a live process

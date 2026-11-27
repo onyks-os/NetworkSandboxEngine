@@ -23,6 +23,17 @@ _NFT_ERROR_RE = re.compile(
     r"^(?P<file>[^:]+):(?P<line>\d+):(?P<col_range>[\d-]+):\s*(?P<level>\w+):\s*(?P<msg>.+)$"
 )
 
+#: Prepended to the trace block, in the same ``nft -f`` transaction. ``nft -f``
+#: appends to a chain that already exists, so without this every load() added
+#: another ``meta nftrace set 1``, and a load() without ``trace_output`` kept the
+#: output chain an earlier load() had added. The first line creates the table if
+#: it is missing, so that the delete cannot fail; after every load() the table
+#: holds exactly the chains that call asked for.
+_TRACE_RESET = """
+table inet nse_trace
+delete table inet nse_trace
+"""
+
 _TRACE_INIT_RULESET = """
 table inet nse_trace {
   chain nse_trace_prerouting {
@@ -100,13 +111,23 @@ class RuleEngine:
         """
         Write rules to a temp file and load them inside *netns_name*.
         Automatically prepends tracing enablement (meta trace set 1).
+
+        NSE's ``inet nse_trace`` table is replaced, not added to, in the same
+        transaction: loading again never duplicates its rules, and the output
+        chain exists only when this engine has ``trace_output``. A ruleset that
+        starts with ``flush ruleset`` removes the table again, and with it all
+        tracing; use :meth:`flush` before :meth:`load` instead.
         """
         if not netns_name:
             raise ValueError("netns_name must be provided, refusing to inject into init_net.")
 
         logger.info("Loading rules into netns %s", netns_name)
 
-        trace = _TRACE_INIT_RULESET + (_TRACE_OUTPUT_RULESET if self.trace_output else "")
+        trace = (
+            _TRACE_RESET
+            + _TRACE_INIT_RULESET
+            + (_TRACE_OUTPUT_RULESET if self.trace_output else "")
+        )
         full_ruleset = f"{trace}\n{rules}"
 
         with _temp_rules_file(full_ruleset) as path:
