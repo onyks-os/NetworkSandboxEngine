@@ -69,6 +69,11 @@ Sending needs `CAP_NET_RAW` in the sending namespace, as capturing does. The
 frame is sent from a thread created for the purpose, which enters that
 namespace and ends with it.
 
+Version 2 beacons also carry the sender's `boot_id` and clocks, and are
+followed by a *follow-up* frame. They map a sender's clock onto the capture's:
+see [Observing Outside the Sandbox](observing-outside-the-sandbox.md). A live
+capture recognises both versions.
+
 ---
 
 ## Filters, and when mark() refuses

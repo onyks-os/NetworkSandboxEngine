@@ -10,6 +10,60 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Thi
 
 ---
 
+## [2.6.0] - 2026-11-27
+
+### Added
+
+Observing a phase on a machine NSE does not run on, such as a reload, reboot,
+suspend or teardown inside a VM. All of it is opt-in, and existing APIs keep
+their behaviour. See *Observing Outside the Sandbox*.
+
+- **Portable streams.** `StimulusStream.command(python="python3")` returns the
+  agent's command line and its stream ID, to run anywhere (over ssh, for
+  instance). `StreamLog.parse(output, stream_id, *, final, stream)` reads what
+  it printed. The log records the machine's `boot_id` (`StreamLog.boot_id`),
+  and `CLOCK_BOOTTIME` alongside `CLOCK_MONOTONIC` for the stream and each
+  attempt (`started_boottime`).
+  - A log that spans boots, holds more than one run, or ends without the
+    stream's end event is never `complete`, and `problems` says why.
+  - A suspend is a `Gap`: `CLOCK_MONOTONIC` stops while suspended and
+    `CLOCK_BOOTTIME` does not, and `Gap.suspended` holds the difference.
+- **`CaptureReport.from_pcap(path, *, required_bytes=None, expected_beacons=())`**
+  returns the report and the packets of a pcap file NSE did not capture, such
+  as one QEMU wrote.
+  - **Refusals.** Any structural damage is refused: an empty or cut file
+    header, a wrong magic (pcapng included) or version, a record header or
+    frame cut short, and `incl > orig` or `incl > snaplen`. The records before
+    the damage are kept, and the damage is in `errors`.
+  - **Fields.** The report fills in `link_type`, `snaplen`,
+    `packets_truncated`, `snaplen_sufficient` and the `beacons_*` fields, and
+    sets the new `source="pcap_file"`. `kernel_drops` is `None`.
+  - **Completeness.** `window_complete` is `True` only for an intact file
+    whose snap length covers `required_bytes`, with at least one expected
+    beacon and every expected beacon present. Without expected beacons it is
+    `None`.
+- **Clocked beacons (version 2).** The frame carries the sender's `boot_id`,
+  `CLOCK_MONOTONIC` and `CLOCK_BOOTTIME` read just before it was sent. A
+  follow-up frame with the same token carries the values read just after.
+  - Live captures and `from_pcap` both record the pair as one sighting, with a
+    `SenderClock`.
+  - `beacons.agent_command()` and `beacons.agent_report()` run a portable
+    standard-library agent that sends them as root on the far side.
+  - Version 1 beacons are unchanged.
+- **`ClockMap.from_beacons(sightings)`** maps each boot's `CLOCK_BOOTTIME`
+  onto the capture's clock. The uncertainty is the widest before/after
+  bracket plus the spread between beacons. The map is valid only for its own
+  boot, and only between that boot's first and last beacon; outside it,
+  `to_capture()` returns `None`, never an estimate.
+- **`correlate(..., clock=clock_map)`** places every attempt on the capture's
+  clock (`Fate.capture_time` and `capture_uncertainty`), and `between()` then
+  takes capture times. An attempt whose uncertainty crosses the edge of the
+  slice, or one the map cannot place, makes it inconclusive.
+- `nse.formats`, a leaf package with the pcap reader and writer and the beacon
+  frame codec. The models can use it, which they cannot do with `nse.core`.
+
+---
+
 ## [2.5.2] - 2026-11-27
 
 ### Fixed

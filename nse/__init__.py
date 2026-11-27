@@ -9,7 +9,14 @@ from importlib.metadata import version as _version
 from .core.netns_controller import NetnsController
 from .core.process import IdentityError, ManagedProcess, ProcessExitedError, ProcessStartError
 from .core.sniffer import CaptureError, CaptureStartError, CaptureStateError, PCAPAsserter
-from .models.capture_report import Beacon, BeaconSighting, CaptureLimits, CaptureReport
+from .models.capture_report import (
+    Beacon,
+    BeaconSighting,
+    CaptureLimits,
+    CaptureReport,
+    SenderClock,
+)
+from .models.clock import BootClock, ClockMap, MappedTime
 from .models.experiment_report import ExperimentReport, PositiveControl
 from .models.process import EffectiveIdentity, ProcessIdentity, ProcessResult
 from .models.stimulus import Endpoint, Receipt, ReceiptLog, StimulusResult
@@ -29,11 +36,13 @@ except PackageNotFoundError:  # pragma: no cover - running from a bare checkout
 __all__ = [
     "Beacon",
     "BeaconSighting",
+    "BootClock",
     "CaptureError",
     "CaptureLimits",
     "CaptureReport",
     "CaptureStartError",
     "CaptureStateError",
+    "ClockMap",
     "Correlation",
     "EffectiveIdentity",
     "Endpoint",
@@ -42,6 +51,7 @@ __all__ = [
     "Gap",
     "IdentityError",
     "ManagedProcess",
+    "MappedTime",
     "NetnsController",
     "Observation",
     "PCAPAsserter",
@@ -56,6 +66,7 @@ __all__ = [
     "ReceiverSpec",
     "ReceiverStartError",
     "RunningStream",
+    "SenderClock",
     "Stimulus",
     "StimulusResult",
     "StimulusStream",

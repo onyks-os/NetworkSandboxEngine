@@ -13,9 +13,13 @@ test, never by the report.
 
 from __future__ import annotations
 
-from typing import Literal
+import os
+from collections.abc import Iterable
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
+
+from nse.formats.beacon import BeaconFrame
 
 Termination = Literal[
     "stopped",  # stop requested and the capture loop drained and exited in time
@@ -37,6 +41,8 @@ StartFailure = Literal[
 ]
 
 OutputMode = Literal["memory", "file"]
+
+CaptureSource = Literal["live", "pcap_file"]
 
 LimitName = Literal[
     "max_packets",
@@ -100,6 +106,32 @@ class CaptureLimits(BaseModel):
     )
 
 
+class SenderClock(BaseModel):
+    """The sender's clocks around one clocked (version 2) beacon.
+
+    The beacon frame carries the values read just before it was sent; its
+    follow-up frame carries those read just after. Until the follow-up is seen
+    the ``*_after`` fields are None, and the sending time is not bracketed.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    boot_id: str = Field(description="The sender's /proc/sys/kernel/random/boot_id.")
+    monotonic_before: float = Field(description="CLOCK_MONOTONIC just before sending, seconds.")
+    boottime_before: float = Field(description="CLOCK_BOOTTIME just before sending, seconds.")
+    monotonic_after: float | None = Field(
+        default=None, description="CLOCK_MONOTONIC just after sending; None without a follow-up."
+    )
+    boottime_after: float | None = Field(
+        default=None, description="CLOCK_BOOTTIME just after sending; None without a follow-up."
+    )
+
+    @property
+    def bracketed(self) -> bool:
+        """Both sides of the send are known."""
+        return self.monotonic_after is not None and self.boottime_after is not None
+
+
 class Beacon(BaseModel):
     """A beacon frame that was sent: a marker the capture is expected to see.
 
@@ -118,6 +150,9 @@ class Beacon(BaseModel):
     netns: str | None = Field(description="Namespace of that interface; None for NSE's own.")
     sent_at: float = Field(description="Unix time the frame was sent.")
     sent_monotonic: float = Field(description="time.monotonic() when the frame was sent.")
+    clock: SenderClock | None = Field(
+        default=None, description="The sender's clocks, for a clocked beacon; None otherwise."
+    )
 
 
 class BeaconSighting(BaseModel):
@@ -129,6 +164,11 @@ class BeaconSighting(BaseModel):
     token: str
     seen_at: float = Field(description="Unix time the capture read it.")
     index: int = Field(description="How many frames the capture had read before it.")
+    clock: SenderClock | None = Field(
+        default=None,
+        description="The sender's clocks a clocked beacon carried (and its follow-up, "
+        "if seen); None for a version 1 beacon.",
+    )
 
 
 class CaptureReport(BaseModel):
@@ -136,6 +176,11 @@ class CaptureReport(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
+    source: CaptureSource = Field(
+        default="live",
+        description="'live' for a capture NSE ran; 'pcap_file' for a file it only read "
+        "(CaptureReport.from_pcap), whose kernel counters are unknown.",
+    )
     iface: str = Field(description="Interface the capture was armed on.")
     netns: str | None = Field(
         default=None,
@@ -231,7 +276,9 @@ class CaptureReport(BaseModel):
         description="Bytes of each frame the caller said it needs (PCAPAsserter(required_bytes=)).",
     )
     packets_truncated: int = Field(
-        default=0, description="Frames read at exactly snaplen bytes: possibly cut short."
+        default=0,
+        description="Frames read at exactly snaplen bytes: possibly cut short. For a pcap "
+        "file, the records holding fewer bytes than the packet had.",
     )
     beacons_expected: list[Beacon] = Field(
         default_factory=list, description="Beacons sent for this capture, in order."
@@ -241,6 +288,32 @@ class CaptureReport(BaseModel):
         description="Beacon frames the capture read, in order. They count in "
         "packets_observed but are never in the list stop() returns.",
     )
+
+    @classmethod
+    def from_pcap(
+        cls,
+        path: str | os.PathLike[str],
+        *,
+        required_bytes: int | None = None,
+        expected_beacons: Iterable[Beacon] = (),
+    ) -> tuple[CaptureReport, list[Any]]:
+        """The report and the packets of a pcap file NSE did not capture.
+
+        The file is refused, record by record, on any structural damage: an
+        empty or cut file header, a wrong magic or version, a record header or
+        frame cut short, or a record claiming more bytes than the packet had or
+        than the snap length allows. The records before the damage are
+        returned, and the damage is in ``errors``, so the window is not
+        complete. Beacon frames become ``beacons_seen``, never packets.
+
+        Kernel drops are unknown (``kernel_drops`` is None). See
+        :attr:`window_complete` for when such a window counts as complete.
+        """
+        from nse.models._pcap_report import report_from_pcap
+
+        return report_from_pcap(
+            path, required_bytes=required_bytes, expected_beacons=expected_beacons
+        )
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -281,6 +354,13 @@ class CaptureReport(BaseModel):
         unavailable, because completeness then cannot be shown either way. In
         file mode the in-memory sample is not the record, so its limits do not
         count here.
+
+        A report read from a pcap file NSE did not capture (``source`` is
+        ``"pcap_file"``) has no drop counters. Its beacons stand in for them:
+        it is ``True`` only when the file is intact, the snap length covers
+        ``required_bytes``, and at least one beacon was expected and every
+        expected beacon is in the file. Without expected beacons it is
+        ``None``: nothing shows the file covers the window.
         """
         if not self.instrument_healthy:
             return False
@@ -293,8 +373,45 @@ class CaptureReport(BaseModel):
             for name in self.limits_reached
         ):
             return False
+        if self.source == "pcap_file":
+            return True if self.beacons_expected else None
         if self.kernel_packets is None or self.kernel_drops is None:
             return None
         if self.kernel_drops:
             return False
         return self.packets_observed >= self.kernel_packets
+
+
+def record_sighting(
+    sightings: list[BeaconSighting], frame: BeaconFrame, seen_at: float, index: int
+) -> None:
+    """Add the beacon *frame* to *sightings*, or complete the clock of the beacon it follows.
+
+    A follow-up only fills the ``*_after`` clocks of the latest sighting with
+    its token, and only once and from the same boot; any other follow-up is
+    ignored, so the sending time of that beacon stays unbracketed.
+    """
+    if frame.follow_up:
+        for at in range(len(sightings) - 1, -1, -1):
+            if sightings[at].token != frame.token:
+                continue
+            clock = sightings[at].clock
+            if clock is not None and clock.boot_id == frame.boot_id and not clock.bracketed:
+                after = {"monotonic_after": frame.monotonic, "boottime_after": frame.boottime}
+                sightings[at] = sightings[at].model_copy(
+                    update={"clock": clock.model_copy(update=after)}
+                )
+            return
+        return
+    clock = None
+    if frame.boot_id is not None and frame.monotonic is not None and frame.boottime is not None:
+        clock = SenderClock(
+            boot_id=frame.boot_id,
+            monotonic_before=frame.monotonic,
+            boottime_before=frame.boottime,
+        )
+    sightings.append(
+        BeaconSighting(
+            label=frame.label, token=frame.token, seen_at=seen_at, index=index, clock=clock
+        )
+    )

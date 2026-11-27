@@ -29,6 +29,12 @@ stream covered the window without pausing::
 
 Attempt times are ``CLOCK_MONOTONIC``, the clock :func:`time.monotonic` reads,
 so they compare directly with times taken by the test.
+
+A stream can also run somewhere NSE does not manage, a VM over ssh for
+instance: :meth:`StimulusStream.command` gives the agent's command line, and
+:meth:`~nse.models.stream.StreamLog.parse` reads what it printed. With a
+:class:`~nse.models.clock.ClockMap` built from clocked beacons,
+``correlate(..., clock=...)`` places the attempts on the capture's clock.
 """
 
 from __future__ import annotations
@@ -43,16 +49,19 @@ from nse.core import probe_packets
 from nse.core.paths import BinaryNotFoundError
 from nse.core.process import ManagedProcess, ProcessExitedError, ProcessStartError
 from nse.models.capture_report import CaptureReport
+from nse.models.clock import ClockMap
 from nse.models.process import ProcessIdentity, ProcessResult
 from nse.models.stimulus import ReceiptLog
 from nse.models.stream import (
     Correlation,
     Fate,
     FateStatus,
-    StreamAttempt,
     StreamLog,
+    capture_gaps_between,
+    capture_spans,
     covered_times,
     gaps_between,
+    parse_log,
 )
 from nse.stimuli import Stimulus, default_python
 
@@ -118,6 +127,19 @@ class StimulusStream:
         }
         return plan
 
+    def command(self, python: str = "python3") -> tuple[list[str], str]:
+        """The agent's command line, to run wherever the stream should run, and its stream ID.
+
+        The program is standard-library Python, run with *python* (``-I -S``).
+        It prints the log to standard output: read it with
+        ``StreamLog.parse(output, stream_id, final=..., stream=self)``. It stops
+        on SIGTERM, or by itself with *count* or *duration*.
+        """
+        stream_id = probe_packets.new_probe_id()[:16]
+        argv = [python, "-I", "-S", "-c", _agents.source("stimulus")]
+        argv.append(json.dumps(self.plan(stream_id)))
+        return argv, stream_id
+
     async def start(
         self,
         sandbox: Any,
@@ -132,9 +154,7 @@ class StimulusStream:
         within *ready_timeout* seconds. A stream whose attempts all fail is
         still a started stream: each failure is in its log.
         """
-        stream_id = probe_packets.new_probe_id()[:16]
-        argv = [python or default_python(), "-I", "-S", "-c", _agents.source("stimulus")]
-        argv.append(json.dumps(self.plan(stream_id)))
+        argv, stream_id = self.command(python or default_python())
         try:
             process = await sandbox.start_process(
                 argv, identity=identity, max_output_bytes=_OUTPUT_LIMIT
@@ -201,64 +221,23 @@ class RunningStream:
         await self.stop()
 
     def _parse(self, output: bytes, *, final: bool, result: ProcessResult | None) -> StreamLog:
-        problems: list[str] = []
-        attempts: dict[int, StreamAttempt] = {}
-        started: float | None = None
-        end: dict[str, Any] | None = None
-        text = output.decode(errors="replace")
-        lines = text.split("\n")
-        if not text.endswith("\n"):
-            cut = lines.pop()  # unfinished: only a problem once nothing more will come
-            if final and cut.strip():
-                problems.append("the stream's last line was cut off")
-        stimulus = self.stream.stimulus
-        for line in lines:
-            if not line.strip():
-                continue
-            try:
-                event = json.loads(line)
-                kind = event["event"]
-                if kind == "started":
-                    started = float(event["monotonic"])
-                elif kind == "end":
-                    end = event
-                elif kind == "attempt":
-                    seq = int(event["seq"])
-                    attempts[seq] = StreamAttempt(
-                        seq=seq,
-                        started_monotonic=float(event["started_monotonic"]),
-                        result=stimulus._from_report(
-                            str(event["probe_id"]),
-                            event,
-                            None if result is None else result.identity,
-                        ),
-                    )
-                else:
-                    raise ValueError(f"unknown event {kind!r}")
-            except (KeyError, TypeError, ValueError) as exc:
-                problems.append(f"unreadable line in the stream's output ({exc}): {line[:200]!r}")
-        if self.process.output_dropped("stdout"):
-            problems.append("the stream's output exceeded the limit and was cut")
-        expected = len(attempts) if end is None else int(end.get("attempts", -1))
-        missing = sorted(set(range(1, expected + 1)) - set(attempts))
-        if missing:
-            problems.append(
-                f"{len(missing)} attempt(s) missing from the log, first seq {missing[0]}"
-            )
-        if final and end is None:
-            how = "was killed" if result is None else f"ended ({result.termination})"
-            problems.append(f"the stream {how} without reporting its end")
-        if final and result is not None and result.termination == "exited" and result.returncode:
-            problems.append(f"the stream exited with status {result.returncode}: {_stderr(result)}")
-        return StreamLog(
-            stream_id=self.stream_id,
-            period=self.stream.period,
-            started_monotonic=started,
-            attempts=tuple(attempts[seq] for seq in sorted(attempts)),
-            ended=None if end is None else end.get("reason"),
-            complete=final and not problems,
-            problems=tuple(problems),
+        dropped = self.process.output_dropped("stdout")
+        how = "was killed" if result is None else f"ended ({result.termination})"
+        log = parse_log(
+            output,
+            self.stream_id,
+            final=final,
+            stream=self.stream,
+            identity=None if result is None else result.identity,
+            missing_end=f"the stream {how} without reporting its end",
+            extra_problems=["the stream's output exceeded the limit and was cut"]
+            if dropped
+            else [],
         )
+        if final and result is not None and result.termination == "exited" and result.returncode:
+            problem = f"the stream exited with status {result.returncode}: {_stderr(result)}"
+            log = log.model_copy(update={"problems": (*log.problems, problem), "complete": False})
+        return log
 
 
 def correlate(
@@ -269,6 +248,7 @@ def correlate(
     capture: CaptureReport | None = None,
     max_gap_periods: float = _DEFAULT_MAX_GAP_PERIODS,
     nat: bool = False,
+    clock: ClockMap | None = None,
 ) -> Correlation:
     """Join a stream with a capture and a receiver's log, per sequence number.
 
@@ -280,6 +260,11 @@ def correlate(
 
     *nat* recognises attempts whose destination a NAT rewrote, as
     :func:`nse.stimuli.requests_in` does.
+
+    *clock* places every attempt on the capture's clock (:attr:`Fate.capture_time`),
+    from the stream's ``boot_id`` and each attempt's ``CLOCK_BOOTTIME``. The
+    window and :meth:`Correlation.between` are then on the capture's clock, and
+    an attempt the map cannot place makes the window inconclusive.
 
     The window is inconclusive (:attr:`Correlation.conclusive` is ``False``)
     when the stream's log is incomplete, when no attempt started for longer
@@ -369,16 +354,59 @@ def correlate(
     if not times:
         problems.append("no attempt of the stream could run: nothing was tested")
     gaps = gaps_between(times, max_gap_periods * stream.period)
+    window: tuple[float | None, float | None] = (
+        (times[0][1], times[-1][1]) if times else (None, None)
+    )
+    if clock is not None:
+        fates, window = _on_capture_clock(stream, fates, clock, problems)
+        gaps = capture_gaps_between(capture_spans(fates), max_gap_periods * stream.period)
     return Correlation(
         period=stream.period,
         max_gap_periods=max_gap_periods,
+        clock="monotonic" if clock is None else "capture",
         fates=tuple(fates),
         gaps=tuple(gaps),
-        window_start=times[0][1] if times else None,
-        window_end=times[-1][1] if times else None,
+        window_start=window[0],
+        window_end=window[1],
         problems=tuple(problems),
         contradictions=tuple(contradictions),
     )
+
+
+def _on_capture_clock(
+    stream: StreamLog, fates: list[Fate], clock: ClockMap, problems: list[str]
+) -> tuple[list[Fate], tuple[float | None, float | None]]:
+    """*fates* with their capture times, and the window they span on the capture clock."""
+    if stream.boot_id is None:
+        problems.append("the stream's log has no boot_id: it cannot be placed on the capture clock")
+    elif clock.boot(stream.boot_id) is None:
+        problems.append(
+            f"the clock map has no mapping for the stream's boot {stream.boot_id[:8]}"
+            + (": " + "; ".join(clock.problems) if clock.problems else "")
+        )
+    placed: list[Fate] = []
+    unplaced: list[int] = []
+    for fate in fates:
+        if fate.attempt is None:
+            placed.append(fate)
+            continue
+        mapped = clock.to_capture(stream.boot_id, fate.attempt.started_boottime)
+        if mapped is None:
+            unplaced.append(fate.seq)
+            placed.append(fate)
+            continue
+        placed.append(
+            fate.model_copy(
+                update={"capture_time": mapped.time, "capture_uncertainty": mapped.uncertainty}
+            )
+        )
+    if unplaced:
+        problems.append(
+            f"{len(unplaced)} attempt(s) cannot be placed on the capture clock "
+            f"(outside the beacons of their boot), first seq {unplaced[0]}"
+        )
+    times = sorted(f.capture_time for f in placed if f.capture_time is not None and f.covers)
+    return placed, ((times[0], times[-1]) if times else (None, None))
 
 
 def _status(outcome: str, on_wire: bool | None, received: bool | None) -> FateStatus:

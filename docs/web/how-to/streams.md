@@ -152,6 +152,14 @@ StimulusStream(stimulus, period=0.02, count=None, duration=None, max_in_flight=2
 started within `ready_timeout` seconds. A stream whose attempts all fail has
 started; each failure is in its log.
 
+### Elsewhere: a VM, over ssh
+
+`stream.command()` gives the agent's command line, to run on a machine NSE
+does not manage. `StreamLog.parse()` reads what it printed. Each log records
+its `boot_id` and both `CLOCK_MONOTONIC` and `CLOCK_BOOTTIME`, so a reboot
+makes it incomplete, and a suspend shows as a `Gap` with `suspended` set. See
+[Observing Outside the Sandbox](observing-outside-the-sandbox.md).
+
 ### NAT
 
 When a DNAT or redirect rewrites the stream's destination, pass

@@ -68,6 +68,7 @@ from nse.models.capture_report import (
     LimitName,
     StartFailure,
     Termination,
+    record_sighting,
 )
 
 if TYPE_CHECKING:
@@ -459,14 +460,9 @@ class _CaptureLoop(threading.Thread):
         self.bytes += len(raw)
         if self.snaplen is not None and len(raw) >= self.snaplen:
             self.truncated += 1
-        beacon = _beacons.parse(raw)
+        beacon = _beacons.decode(raw)
         if beacon is not None:  # recorded, written, never in the packet list
-            token, label = beacon
-            self.beacons.append(
-                BeaconSighting(
-                    label=label, token=token, seen_at=float(packet.time), index=self.observed - 1
-                )
-            )
+            record_sighting(self.beacons, beacon, float(packet.time), self.observed - 1)
         else:
             self._store(packet, len(raw))
         self._write(packet, raw)
