@@ -197,3 +197,79 @@ async def test_trace_ready_sends_the_canary_from_the_sandbox() -> None:
     assert ready.attempts == 2
     assert "could_not_run" in ready.problems[0]
     assert runs[0] == ("sandbox", {"identity": identity, "python": None})
+
+
+def test_every_load_replaces_the_trace_table_in_the_same_transaction() -> None:
+    for engine in (RuleEngine(), RuleEngine(trace_output=True)):
+        text = _loaded(engine)
+        reset = text.index("table inet nse_trace\ndelete table inet nse_trace\n")
+        assert reset < text.index("chain nse_trace_prerouting") < text.index("table ip t {}")
+        assert text.count("delete table inet nse_trace") == 1
+
+
+FULL = """table inet nse_trace {
+\tchain nse_trace_prerouting {
+\t\ttype filter hook prerouting priority -300; policy accept;
+\t\tmeta nftrace set 1
+\t}
+\tchain nse_trace_output {
+\t\ttype filter hook output priority -350; policy accept;
+\t\tmeta nftrace set 1
+\t}
+}
+"""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("listed", "expected"),
+    [
+        ((0, FULL), []),
+        ((1, "Error: No such file or directory\n"), ["is not loaded", "flush ruleset"]),
+        ((0, FULL.split("\tchain nse_trace_output")[0]), ["no output chain", "trace_output=True"]),
+        ((0, "table inet nse_trace {\n}\n"), ["no prerouting chain", "no output chain"]),
+        ((None, "nft did not answer"), ["could not list", "nft did not answer"]),
+    ],
+)
+async def test_a_failed_readiness_says_what_is_missing_from_the_trace_table(
+    listed: tuple[int | None, str], expected: list[str]
+) -> None:
+    harvester = Harvester()
+    harvester._netns_prefix = ["prefix"]
+
+    async def list_table() -> tuple[int | None, str]:
+        return listed
+
+    async def send() -> str | None:
+        return None
+
+    with patch.object(harvester, "_list_trace_table", list_table):
+        ready = await harvester.prove_ready(send, attempts=1, timeout=0.01)
+    assert not ready.ready
+    text = " | ".join(ready.problems)
+    for fragment in expected:
+        assert fragment in text, text
+    if not expected:
+        assert ready.problems == ()
+
+
+@pytest.mark.asyncio
+async def test_listing_the_trace_table_runs_nft_in_the_namespace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from nse.core import trace_harvester
+
+    harvester = Harvester()
+    # The prefix stands in for `ip netns exec <name>`; nft's arguments follow it.
+    harvester._netns_prefix = ["/bin/sh", "-c", 'echo "listed: $*"; exit 3', "sh"]
+    code, listing = await harvester._list_trace_table()
+    assert code == 3
+    assert "list table inet nse_trace" in listing
+    harvester._netns_prefix = ["/nonexistent/enter-netns"]
+    code, listing = await harvester._list_trace_table()
+    assert code is None
+    assert "nonexistent" in listing
+    monkeypatch.setattr(trace_harvester, "_LIST_TIMEOUT", 0.1)
+    harvester._netns_prefix = ["/bin/sh", "-c", "exec sleep 30", "sh"]
+    code, listing = await harvester._list_trace_table()
+    assert (code, listing) == (None, "nft did not answer within 0.1s")

@@ -630,6 +630,26 @@ def _open_output(target: Output, fds: list[int]) -> tuple[int | None, str | None
     return fd, path, -1
 
 
+async def _stop_created(
+    creating: asyncio.Future[asyncio.subprocess.Process], netns: NetnsIdentity
+) -> None:
+    """Stop a child whose creation was cancelled, and everything it started.
+
+    The child exists as soon as it is forked, before creation returns. A cancel
+    let through to asyncio would kill only that child, the group leader, and
+    leave behind whatever it had already started. So creation is allowed to
+    finish, and then the whole group is killed.
+    """
+    try:
+        proc = await creating
+    except Exception:
+        return
+    await run_blocking(signal_namespace, netns, signal.SIGKILL, pgid=proc.pid)
+    with contextlib.suppress(ProcessLookupError):
+        proc.kill()
+    await proc.wait()
+
+
 async def spawn_process(
     prefix: Sequence[str],
     argv: Sequence[str | os.PathLike[str]],
@@ -665,15 +685,23 @@ async def spawn_process(
         out_fd, out_path, out_read = _open_output(stdout, fds)
         err_fd, err_path, err_read = _open_output(stderr, fds)
         command = [*prefix, *launcher, resolve("sh"), "-c", _PROBE, _LAUNCHER, *args]
-        proc = await asyncio.create_subprocess_exec(
-            *command,
-            stdin=chain_end.fileno(),
-            stdout=asyncio.subprocess.DEVNULL if out_fd is None else out_fd,
-            stderr=asyncio.subprocess.DEVNULL if err_fd is None else err_fd,
-            start_new_session=True,
-            env=None if env is None else dict(env),
-            cwd=cwd,
+        creating = asyncio.ensure_future(
+            asyncio.create_subprocess_exec(
+                *command,
+                stdin=chain_end.fileno(),
+                stdout=asyncio.subprocess.DEVNULL if out_fd is None else out_fd,
+                stderr=asyncio.subprocess.DEVNULL if err_fd is None else err_fd,
+                start_new_session=True,
+                env=None if env is None else dict(env),
+                cwd=cwd,
+            )
         )
+        try:
+            proc = await asyncio.shield(creating)
+        except asyncio.CancelledError:
+            with contextlib.suppress(asyncio.CancelledError):
+                await asyncio.shield(_stop_created(creating, netns))
+            raise
     except BaseException:
         handshake.close()
         chain_end.close()

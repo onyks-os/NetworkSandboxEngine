@@ -10,6 +10,38 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Thi
 
 ---
 
+## [2.5.2] - 2026-11-27
+
+### Fixed
+
+- **`RuleEngine.load()` no longer accumulates NSE's trace rules.** `nft -f`
+  appends to a chain that already exists, so every `load()` into the same
+  namespace added another `meta nftrace set 1` to `nse_trace_prerouting` (and
+  `nse_trace_output`). Verdicts were unaffected, but each packet's trace
+  repeated NSE's rule once per load. A `load()` without `trace_output` also
+  kept the output chain of an earlier `load()` with it. The trace block now
+  starts with `table inet nse_trace` and `delete table inet nse_trace` in the
+  same transaction: after every `load()` the table holds exactly the chains
+  that call asked for.
+- **Cancelling `spawn_process()` while the child is being created no longer
+  leaves part of it running.** The child exists before
+  `asyncio.create_subprocess_exec()` returns. A cancel in that window reached
+  asyncio, which killed only the group leader, so whatever the launch chain had
+  already started survived, adopted by init. This made
+  `test_cancelling_the_start_leaves_nothing_running` fail intermittently on
+  Ubuntu, where `/bin/sh` forks a command it could have replaced itself with.
+  Creation now finishes, shielded from the cancel, and then the whole process
+  group is killed.
+
+### Added
+
+- When `TraceHarvester.prove_ready()` (and so `stimuli.trace_ready()`) cannot
+  prove readiness, `TraceReadiness.problems` says whether `inet nse_trace` is
+  missing from the namespace, as after a ruleset that starts with
+  `flush ruleset`, or lacks its prerouting or output chain.
+
+---
+
 ## [2.5.1] - 2026-11-23
 
 ### Fixed

@@ -55,6 +55,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("nse.core.trace_harvester")
 
+#: Seconds to wait for ``nft list table`` when explaining a failed readiness proof.
+_LIST_TIMEOUT = 5.0
+
 # How many unparsed lines to keep verbatim for the error message.
 _MAX_UNPARSED_SAMPLES = 5
 
@@ -174,6 +177,7 @@ class TraceHarvester:
         self._event_signal = asyncio.Event()
         self._event_predicate: Callable[[TraceEvent], bool] | None = None
         self.matched_trace_ids: set[str] = set()
+        self._netns_prefix: list[str] | None = None  # how start() entered the namespace
         self._stop_requested = False
         self._deadline: float = 0.0
 
@@ -261,6 +265,7 @@ class TraceHarvester:
                     predicate=predicate,
                 )
         problems += self.health_errors() if self.state is not HarvestState.RUNNING else []
+        problems += await self._trace_table_problems()
         return TraceReadiness(
             ready=False,
             attempts=made,
@@ -268,6 +273,62 @@ class TraceHarvester:
             problems=tuple(problems),
             predicate=predicate,
         )
+
+    async def _trace_table_problems(self) -> list[str]:
+        """Why no packet may be traced at all: NSE's trace table or its chains are gone.
+
+        Only consulted when readiness was not proven, to say *why*. A ruleset
+        that starts with ``flush ruleset`` deletes the table RuleEngine.load()
+        put in front of it; a canary sent from inside the namespace needs the
+        output chain of ``RuleEngine(trace_output=True)``.
+        """
+        if self._netns_prefix is None:
+            return []
+        code, listing = await self._list_trace_table()
+        if code is None:
+            return [f"could not list table inet nse_trace: {listing}"]
+        if code != 0:
+            return [
+                "table inet nse_trace is not loaded in the namespace, so nothing sets "
+                "nftrace: load rules with RuleEngine.load(), and do not start them with "
+                "`flush ruleset`, which deletes it (call RuleEngine.flush() first instead)"
+            ]
+        problems = []
+        if "nse_trace_prerouting" not in listing:
+            problems.append(
+                "table inet nse_trace has no prerouting chain: arriving traffic is not traced"
+            )
+        if "nse_trace_output" not in listing:
+            problems.append(
+                "table inet nse_trace has no output chain: traffic sent from inside the "
+                "namespace is not traced (use RuleEngine(trace_output=True))"
+            )
+        return problems
+
+    async def _list_trace_table(self) -> tuple[int | None, str]:
+        """``nft list table inet nse_trace`` in the traced namespace: (exit code, output)."""
+        assert self._netns_prefix is not None
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *self._netns_prefix,
+                resolve("nft"),
+                "list",
+                "table",
+                "inet",
+                "nse_trace",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+        except OSError as exc:
+            return None, str(exc)
+        try:
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=_LIST_TIMEOUT)
+        except asyncio.TimeoutError:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            await proc.wait()
+            return None, f"nft did not answer within {_LIST_TIMEOUT}s"
+        return proc.returncode, out.decode(errors="replace")
 
     def arm_event_signal(self, predicate: Callable[[TraceEvent], bool] | None = None) -> None:
         """Clear the event signal so the next :meth:`wait_for_event` waits for a *new* event."""
@@ -313,16 +374,11 @@ class TraceHarvester:
         self._stop_requested = False
         self.error = None
         if use_nsenter:
-            cmd = [
-                resolve("nsenter"),
-                f"--net=/var/run/netns/{netns_name}",
-                "--",
-                resolve("nft"),
-                "monitor",
-                "trace",
-            ]
+            prefix = [resolve("nsenter"), f"--net=/var/run/netns/{netns_name}", "--"]
         else:
-            cmd = [resolve("ip"), "netns", "exec", netns_name, resolve("nft"), "monitor", "trace"]
+            prefix = [resolve("ip"), "netns", "exec", netns_name]
+        self._netns_prefix = prefix
+        cmd = [*prefix, resolve("nft"), "monitor", "trace"]
         logger.debug("Starting trace monitor: %s", " ".join(cmd))
 
         self._proc = await asyncio.create_subprocess_exec(

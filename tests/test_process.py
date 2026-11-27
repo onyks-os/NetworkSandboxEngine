@@ -69,9 +69,22 @@ def sandbox_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, str]]:
     env = {**os.environ, key: value}
     yield env
     leftovers = namespace_processes(FAKE)
+    described = [_describe(pid) for pid in leftovers]  # before they are killed
     for pid in leftovers:
         os.kill(pid, signal.SIGKILL)
-    assert not leftovers, f"test left processes behind: {leftovers}"
+    assert not leftovers, f"test left processes behind: {described}"
+
+
+def _describe(pid: int) -> str:
+    """What a leftover process is: enough to tell a leak from one still dying."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").strip()
+    except OSError as exc:
+        return f"{pid} (gone: {exc})"
+    fields = stat[stat.rindex(")") + 2 :].split()  # after "pid (comm) "
+    state, ppid, pgid = fields[0], fields[1], fields[2]
+    return f"{pid} state={state} ppid={ppid} pgid={pgid} own_pid={os.getpid()} cmd={cmdline!r}"
 
 
 def _alive(pid: int) -> bool:
@@ -278,6 +291,57 @@ async def test_cancelling_the_start_leaves_nothing_running(sandbox_env: dict[str
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(task, timeout=10)
+
+
+async def test_a_cancel_while_the_child_is_created_stops_what_it_started(
+    sandbox_env: dict[str, str],
+) -> None:
+    """The child exists before creation returns. A cancel in that window must
+    stop its whole group, not only the leader asyncio would kill."""
+    real = asyncio.create_subprocess_exec
+    created = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_create(*args: Any, **kwargs: Any) -> asyncio.subprocess.Process:
+        proc = await real(*args, **kwargs)
+        try:
+            created.set()
+            await release.wait()
+        except asyncio.CancelledError:
+            proc.kill()  # what asyncio does to a transport whose creation is cancelled
+            await proc.wait()
+            raise
+        return proc
+
+    # `; :` makes the shell fork sleep instead of becoming it, as dash does.
+    prefix = ["/bin/sh", "-c", "sleep 30; :", "chain"]
+    with patch.object(asyncio, "create_subprocess_exec", slow_create):
+        task = asyncio.ensure_future(spawn_process(prefix, ["true"], netns=FAKE, env=sandbox_env))
+        await asyncio.wait_for(created.wait(), 10)
+        assert await asyncio.to_thread(_wait_for, lambda: len(namespace_processes(FAKE)) == 2)
+        task.cancel()
+        asyncio.get_running_loop().call_later(0.2, release.set)
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=10)
+    assert namespace_processes(FAKE) == []
+
+
+async def test_a_cancelled_creation_that_failed_has_nothing_to_stop(
+    sandbox_env: dict[str, str],
+) -> None:
+    release = asyncio.Event()
+
+    async def failing_create(*args: Any, **kwargs: Any) -> asyncio.subprocess.Process:
+        await release.wait()
+        raise OSError("fork failed")
+
+    with patch.object(asyncio, "create_subprocess_exec", failing_create):
+        task = asyncio.ensure_future(spawn_process(["true"], ["true"], netns=FAKE, env=sandbox_env))
+        await asyncio.sleep(0.05)
+        task.cancel()
+        asyncio.get_running_loop().call_later(0.05, release.set)
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=10)
 
 
 async def test_an_identity_mismatch_never_runs_the_application(
@@ -840,3 +904,16 @@ async def test_capabilities_are_always_stored_frozen() -> None:
     identity = ProcessIdentity(capabilities={"net_raw"})
     assert isinstance(identity.capabilities, frozenset)
     assert hash(identity)  # a frozen model stays hashable
+
+
+async def test_a_leftover_is_described_with_its_state_parent_and_group() -> None:
+    child = subprocess.Popen(["sleep", "30"])
+    try:
+        text = _describe(child.pid)
+    finally:
+        child.kill()
+        child.wait()
+    assert f"ppid={os.getpid()}" in text
+    assert "cmd=b'sleep 30'" in text
+    assert "state=" in text
+    assert "gone" in _describe(2**22 + 1)  # above pid_max: never a live process
